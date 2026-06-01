@@ -1,188 +1,204 @@
 /*
- * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
- * SPDX-License-Identifier: CC0-1.0
+ * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
-
-#include <stdio.h>
-#include <string.h>
-#include <inttypes.h>
-#include "esp_system.h"
-#include "esp_log.h"
-#include "esp_err.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
-
+#include "freertos/queue.h"
+#include "freertos/event_groups.h"
+#include "esp_log.h"
+#include "esp_intr_alloc.h"
 #include "usb/usb_host.h"
-#include "usb/cdc_acm_host.h"
+#include "driver/gpio.h"
 
-#define EXAMPLE_USB_HOST_PRIORITY   (20)
+#define HOST_LIB_TASK_PRIORITY 2
+#define CLASS_TASK_PRIORITY 3
 
-#define EXAMPLE_USB_DEVICE_VID (0x1209)
-#define EXAMPLE_USB_DEVICE_PID (0x5740)
+#ifdef CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
+#define ENABLE_ENUM_FILTER_CALLBACK
+#endif // CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
 
-#define EXAMPLE_USB_DEVICE_DUAL_PID (0x4002) // 0x303A:0x4002 (TinyUSB Dual CDC device)
-#define EXAMPLE_TX_STRING           ("CDC test string!")
-#define EXAMPLE_TX_TIMEOUT_MS       (1000)
+extern void class_driver_task(void *arg);
+extern void class_driver_client_deregister(void);
 
-static const char *TAG = "USB-CDC";
-static SemaphoreHandle_t device_disconnected_sem;
+static const char *TAG = "USB host lib";
+
+QueueHandle_t app_event_queue = NULL;
 
 /**
- * @brief Data received callback
+ * @brief APP event group
  *
- * @param[in] data     Pointer to received data
- * @param[in] data_len Length of received data in bytes
- * @param[in] arg      Argument we passed to the device open function
- * @return
- *   true:  We have processed the received data
- *   false: We expect more data
+ * APP_EVENT            - General event, which is APP_QUIT_PIN press event in this example.
  */
-static bool handle_rx(const uint8_t *data, size_t data_len, void *arg)
+typedef enum
 {
-    ESP_LOGI(TAG, "Data received");
-    ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_INFO);
+    APP_EVENT = 0,
+} app_event_group_t;
+
+/**
+ * @brief APP event queue
+ *
+ * This event is used for delivering events from callback to a task.
+ */
+typedef struct
+{
+    app_event_group_t event_group;
+} app_event_queue_t;
+
+
+/**
+ * @brief Set configuration callback
+ *
+ * Set the USB device configuration during the enumeration process, must be enabled in the menuconfig
+
+ * @note bConfigurationValue starts at index 1
+ *
+ * @param[in] dev_desc device descriptor of the USB device currently being enumerated
+ * @param[out] bConfigurationValue configuration descriptor index, that will be user for enumeration
+ *
+ * @return bool
+ * - true:  USB device will be enumerated
+ * - false: USB device will not be enumerated
+ */
+#ifdef ENABLE_ENUM_FILTER_CALLBACK
+static bool set_config_cb(const usb_device_desc_t *dev_desc, uint8_t *bConfigurationValue)
+{
+    // If the USB device has more than one configuration, set the second configuration
+    if (dev_desc->bNumConfigurations > 1)
+    {
+        *bConfigurationValue = 2;
+    }
+    else
+    {
+        *bConfigurationValue = 1;
+    }
+
+    // Return true to enumerate the USB device
     return true;
 }
+#endif // ENABLE_ENUM_FILTER_CALLBACK
 
 /**
- * @brief Device event callback
+ * @brief Start USB Host install and handle common USB host library events while app pin not low
  *
- * Apart from handling device disconnection it doesn't do anything useful
- *
- * @param[in] event    Device event type and data
- * @param[in] user_ctx Argument we passed to the device open function
+ * @param[in] arg  Not used
  */
-static void handle_event(const cdc_acm_host_dev_event_data_t *event, void *user_ctx)
+static void usb_host_lib_task(void *arg)
 {
-    switch (event->type) {
-    case CDC_ACM_HOST_ERROR:
-        ESP_LOGE(TAG, "CDC-ACM error has occurred, err_no = %i", event->data.error);
-        break;
-    case CDC_ACM_HOST_DEVICE_DISCONNECTED:
-        ESP_LOGI(TAG, "Device suddenly disconnected");
-        ESP_ERROR_CHECK(cdc_acm_host_close(event->data.cdc_hdl));
-        xSemaphoreGive(device_disconnected_sem);
-        break;
-    case CDC_ACM_HOST_SERIAL_STATE:
-        ESP_LOGI(TAG, "Serial state notif 0x%04X", event->data.serial_state.val);
-        break;
-    default:
-        ESP_LOGW(TAG, "Unsupported CDC event: %d (possibly suspend/resume)", event->type);
-        break;
-    }
-}
-
-/**
- * @brief USB Host library handling task
- *
- * @param arg Unused
- */
-static void usb_lib_task(void *arg)
-{
-    while (1) {
-        // Start handling system events
-        uint32_t event_flags;
-        usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
-        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
-            ESP_ERROR_CHECK(usb_host_device_free_all());
-        }
-        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
-            ESP_LOGI(TAG, "USB: All devices freed");
-            // Continue handling USB events to allow device reconnection
-        }
-    }
-}
-
-
-void set_up_host()
-{
-    device_disconnected_sem = xSemaphoreCreateBinary();
-    assert(device_disconnected_sem);
-
-    // Install USB Host driver. Should only be called once in entire application
-    ESP_LOGI(TAG, "Installing USB Host");
-    const usb_host_config_t host_config = {
+    ESP_LOGI(TAG, "Installing USB Host Library");
+    usb_host_config_t host_config = {
         .skip_phy_setup = false,
         .intr_flags = ESP_INTR_FLAG_LOWMED,
+#ifdef ENABLE_ENUM_FILTER_CALLBACK
+        .enum_filter_cb = set_config_cb,
+#endif // ENABLE_ENUM_FILTER_CALLBACK
+        .peripheral_map = BIT0,
     };
     ESP_ERROR_CHECK(usb_host_install(&host_config));
+    ESP_LOGI(TAG, "USB Host installed with peripheral map 0x%x", host_config.peripheral_map);
 
-    // Create a task that will handle USB library events
-    BaseType_t task_created = xTaskCreate(usb_lib_task, "usb_lib", 4096, xTaskGetCurrentTaskHandle(), EXAMPLE_USB_HOST_PRIORITY, NULL);
-    assert(task_created == pdTRUE);
+    // Signalize the app_main, the USB host library has been installed
+    xTaskNotifyGive(arg);
 
-    ESP_LOGI(TAG, "Installing CDC-ACM driver");
-    ESP_ERROR_CHECK(cdc_acm_host_install(NULL));
-}
-
-/**
- * @brief Main application
- *
- * Here we open a USB CDC device and send some data to it
- */
-void app_main(void)
-{
-    set_up_host();
-
-
-    const cdc_acm_host_device_config_t dev_config = {
-        .connection_timeout_ms = 1000,
-        .out_buffer_size = 512,
-        .in_buffer_size = 512,
-        .user_arg = NULL,
-        .event_cb = handle_event,
-        .data_cb = handle_rx};
-
-    while (true) {
-        cdc_acm_dev_hdl_t cdc_dev = NULL;
-
-        // Open USB device from tusb_serial_device example example. Either single or dual port configuration.
-        ESP_LOGI(TAG, "Opening CDC ACM device 0x%04X:0x%04X...", EXAMPLE_USB_DEVICE_VID, EXAMPLE_USB_DEVICE_PID);
-        
-        esp_err_t err = cdc_acm_host_open(EXAMPLE_USB_DEVICE_VID, EXAMPLE_USB_DEVICE_PID, 0, &dev_config, &cdc_dev);
-        if (ESP_OK != err) {
-            ESP_LOGI(TAG, "Opening CDC ACM device 0x%04X:0x%04X...", EXAMPLE_USB_DEVICE_VID, EXAMPLE_USB_DEVICE_DUAL_PID);
-            err = cdc_acm_host_open(EXAMPLE_USB_DEVICE_VID, EXAMPLE_USB_DEVICE_DUAL_PID, 0, &dev_config, &cdc_dev);
-            if (ESP_OK != err) {
-                ESP_LOGI(TAG, "Failed to open device");
-                continue;
+    bool has_clients = true;
+    bool has_devices = false;
+    while (has_clients)
+    {
+        uint32_t event_flags;
+        ESP_ERROR_CHECK(usb_host_lib_handle_events(portMAX_DELAY, &event_flags));
+        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS)
+        {
+            ESP_LOGI(TAG, "Get FLAGS_NO_CLIENTS");
+            if (ESP_OK == usb_host_device_free_all())
+            {
+                ESP_LOGI(TAG, "All devices marked as free, no need to wait FLAGS_ALL_FREE event");
+                has_clients = false;
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Wait for the FLAGS_ALL_FREE");
+                has_devices = true;
             }
         }
-        
-        cdc_acm_host_desc_print(cdc_dev);
-        vTaskDelay(pdMS_TO_TICKS(100));
-
-        // Test sending and receiving: responses are handled in handle_rx callback
-        ESP_ERROR_CHECK(cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)EXAMPLE_TX_STRING, strlen(EXAMPLE_TX_STRING), EXAMPLE_TX_TIMEOUT_MS));
-        vTaskDelay(pdMS_TO_TICKS(100));
-
-        // Test Line Coding commands: Get current line coding, change it 9600 7N1 and read again
-        ESP_LOGI(TAG, "Setting up line coding");
-
-        cdc_acm_line_coding_t line_coding;
-        ESP_ERROR_CHECK(cdc_acm_host_line_coding_get(cdc_dev, &line_coding));
-        ESP_LOGI(TAG, "Line Get: Rate: %"PRIu32", Stop bits: %"PRIu8", Parity: %"PRIu8", Databits: %"PRIu8"",
-                 line_coding.dwDTERate, line_coding.bCharFormat, line_coding.bParityType, line_coding.bDataBits);
-
-        line_coding.dwDTERate = 9600;
-        line_coding.bDataBits = 7;
-        line_coding.bParityType = 1;
-        line_coding.bCharFormat = 1;
-        ESP_ERROR_CHECK(cdc_acm_host_line_coding_set(cdc_dev, &line_coding));
-        ESP_LOGI(TAG, "Line Set: Rate: %"PRIu32", Stop bits: %"PRIu8", Parity: %"PRIu8", Databits: %"PRIu8"",
-                 line_coding.dwDTERate, line_coding.bCharFormat, line_coding.bParityType, line_coding.bDataBits);
-
-        ESP_ERROR_CHECK(cdc_acm_host_line_coding_get(cdc_dev, &line_coding));
-        ESP_LOGI(TAG, "Line Get: Rate: %"PRIu32", Stop bits: %"PRIu8", Parity: %"PRIu8", Databits: %"PRIu8"",
-                 line_coding.dwDTERate, line_coding.bCharFormat, line_coding.bParityType, line_coding.bDataBits);
-
-        ESP_ERROR_CHECK(cdc_acm_host_set_control_line_state(cdc_dev, true, false));
-
-        // We are done. Wait for device disconnection and start over
-        ESP_LOGI(TAG, "Example finished successfully! You can reconnect the device to run again.");
-        xSemaphoreTake(device_disconnected_sem, portMAX_DELAY);
+        if (has_devices && event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE)
+        {
+            ESP_LOGI(TAG, "Get FLAGS_ALL_FREE");
+            has_clients = false;
+        }
     }
+    ESP_LOGI(TAG, "No more clients and devices, uninstall USB Host library");
+
+    // Uninstall the USB Host Library
+    ESP_ERROR_CHECK(usb_host_uninstall());
+    vTaskSuspend(NULL);
+}
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "USB host library example");
+
+    app_event_queue = xQueueCreate(10, sizeof(app_event_queue_t));
+    app_event_queue_t evt_queue;
+
+    TaskHandle_t host_lib_task_hdl, class_driver_task_hdl;
+
+    // Create usb host lib task
+    BaseType_t task_created;
+    task_created = xTaskCreatePinnedToCore(usb_host_lib_task,
+                                           "usb_host",
+                                           4096,
+                                           xTaskGetCurrentTaskHandle(),
+                                           HOST_LIB_TASK_PRIORITY,
+                                           &host_lib_task_hdl,
+                                           0);
+    assert(task_created == pdTRUE);
+
+    // Wait until the USB host library is installed
+    ulTaskNotifyTake(false, 1000);
+
+    // Create class driver task
+    task_created = xTaskCreatePinnedToCore(class_driver_task,
+                                           "class",
+                                           5 * 1024,
+                                           NULL,
+                                           CLASS_TASK_PRIORITY,
+                                           &class_driver_task_hdl,
+                                           0);
+    assert(task_created == pdTRUE);
+    // Add a short delay to let the tasks run
+    vTaskDelay(10);
+
+    while (1)
+    {
+        if (xQueueReceive(app_event_queue, &evt_queue, portMAX_DELAY))
+        {
+            if (APP_EVENT == evt_queue.event_group)
+            {
+                // User pressed button
+                usb_host_lib_info_t lib_info;
+                ESP_ERROR_CHECK(usb_host_lib_info(&lib_info));
+                if (lib_info.num_devices != 0)
+                {
+                    ESP_LOGW(TAG, "Shutdown with attached devices.");
+                }
+                // End while cycle
+                break;
+            }
+        }
+    }
+
+    // Deregister client
+    class_driver_client_deregister();
+    vTaskDelay(10);
+
+    // Delete the tasks
+    vTaskDelete(class_driver_task_hdl);
+    vTaskDelete(host_lib_task_hdl);
+
+    // Delete queue
+    xQueueReset(app_event_queue);
+    vQueueDelete(app_event_queue);
+    ESP_LOGI(TAG, "End of the example");
 }
