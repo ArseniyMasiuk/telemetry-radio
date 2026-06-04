@@ -13,17 +13,22 @@
 #include "usb/usb_host.h"
 #include "driver/gpio.h"
 
+#include "usb_cdc.h"
+
+#include "class_driver.h"
+
 #define HOST_LIB_TASK_PRIORITY 2
 #define CLASS_TASK_PRIORITY 3
+
+#define ENABLE_ENUM_FILTER_CALLBACK
 
 #ifdef CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
 #define ENABLE_ENUM_FILTER_CALLBACK
 #endif // CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
 
-extern void class_driver_task(void *arg);
-extern void class_driver_client_deregister(void);
 
-static const char *TAG = "USB host lib";
+
+static const char *TAG = "USB host lib: MAIN_LOOP";
 
 QueueHandle_t app_event_queue = NULL;
 
@@ -65,18 +70,21 @@ typedef struct
 #ifdef ENABLE_ENUM_FILTER_CALLBACK
 static bool set_config_cb(const usb_device_desc_t *dev_desc, uint8_t *bConfigurationValue)
 {
-    // If the USB device has more than one configuration, set the second configuration
-    if (dev_desc->bNumConfigurations > 1)
+    // 1. Detect and filter out the ArduPilot Bootloader Port
+    if (dev_desc->idVendor == 0x1209 && dev_desc->idProduct == 0x5741)
     {
-        *bConfigurationValue = 2;
-    }
-    else
-    {
-        *bConfigurationValue = 1;
+        // Returning false tells ESP-IDF: "Do not enumerate this device"
+        return false;
     }
 
-    // Return true to enumerate the USB device
-    return true;
+    // 2. Allow everything else (like your main FC application 0x1209 / 0x5740)
+    // Select the configuration index (defaulting to the first available configuration)
+    if (dev_desc->bNumConfigurations > 1)
+        *bConfigurationValue = 1; // Explicitly use configuration 1
+    else
+        *bConfigurationValue = 1;
+
+    return true; // Enumerate the USB device
 }
 #endif // ENABLE_ENUM_FILTER_CALLBACK
 
@@ -137,6 +145,8 @@ static void usb_host_lib_task(void *arg)
 
 void app_main(void)
 {
+    run_cdc_host();
+
     ESP_LOGI(TAG, "USB host library example");
 
     app_event_queue = xQueueCreate(10, sizeof(app_event_queue_t));
