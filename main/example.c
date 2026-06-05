@@ -16,7 +16,6 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 
-#include "driver/uart.h"     // Native ESP-IDF UART drivers
 #include "usb/cdc_host_types.h"
 #include "usb/usb_host.h"
 #include "usb/cdc_acm_host.h"
@@ -24,8 +23,9 @@
 #include "usb/vcp_cp210x.h"
 #include "usb/vcp_ftdi.h"
 
+#include "uart.h"
+
 #define EXAMPLE_USB_HOST_PRIORITY (20)
-#define EXAMPLE_TX_STRING ("CDC test string!")
 #define EXAMPLE_TX_TIMEOUT_MS (1000)
 #define MAX_CDC_DEVICES (5)
 #define ESPRESSIF_VID (0x303A) // 0x303A Espressif VID, used in TinyUSB devices or in USB-Serial-JTAG devices
@@ -59,32 +59,7 @@ typedef struct
 } app_message_t;
 
 
-#define TELEM_UART_NUM UART_NUM_1 // Use UART1 to avoid interrupting your USB boot/flash console
-#define TELEM_TX_IO_NUM (4)       // Replace with your physical TX solder pad GPIO
-#define TELEM_RX_IO_NUM (5)       // Replace with your physical RX solder pad GPIO
-#define TELEM_BAUD_RATE 420000    // Your exact telemetry radio speed
-#define BUF_SIZE (1024)
 
-void init_telemetry_uart(void)
-{
-    uart_config_t uart_config = {
-        .baud_rate = TELEM_BAUD_RATE,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
-
-    // Configure UART parameters
-    ESP_ERROR_CHECK(uart_param_config(TELEM_UART_NUM, &uart_config));
-
-    // Set pins (TX, RX, RTS, CTS)
-    ESP_ERROR_CHECK(uart_set_pin(TELEM_UART_NUM, TELEM_TX_IO_NUM, TELEM_RX_IO_NUM, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-
-    // Install the driver without an interrupt queue (simple TX stream)
-    ESP_ERROR_CHECK(uart_driver_install(TELEM_UART_NUM, BUF_SIZE * 2, 0, 0, NULL, 0));
-}
 
 /**
  * @brief Find a free slot in the device table.
@@ -115,7 +90,9 @@ static bool handle_rx(const uint8_t *data, size_t data_len, void *arg)
 {
     int slot = (int)arg;
     ESP_LOGI(TAG, "\t- Data received (slot %d)", slot);
-    uart_write_bytes(TELEM_UART_NUM, (const char *)data, data_len);
+    write_data_to_uart(data, data_len);
+
+    ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_INFO);
     return true;
 }
 
@@ -248,96 +225,6 @@ static void free_all_cdc_devices(void)
 }
 
 /**
- * @brief Run CDC demo (print descriptor, tx, control line, line coding) for one device.
- */
-static void run_cdc_demo(int slot)
-{
-    cdc_acm_dev_hdl_t cdc_dev = cdc_devices[slot];
-
-    ESP_LOGI(TAG, "CDC device opened (slot %d). Descriptor:", slot);
-    cdc_acm_host_desc_print(cdc_dev);
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    ESP_LOGI(TAG, "Testing data transmission");
-    ESP_ERROR_CHECK(cdc_acm_host_data_tx_blocking(cdc_dev, (const uint8_t *)EXAMPLE_TX_STRING,
-                                                  strlen(EXAMPLE_TX_STRING), EXAMPLE_TX_TIMEOUT_MS));
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    ESP_LOGI(TAG, "Testing control line state command");
-    esp_err_t err = cdc_acm_host_set_control_line_state(cdc_dev, false, false);
-    if (err == ESP_ERR_NOT_SUPPORTED)
-    {
-        ESP_LOGW(TAG, "\t- Control line state set not supported");
-    }
-    else if (err != ESP_OK)
-    {
-        ESP_LOGE(TAG, "\t- Failed to set control line state");
-    }
-    else
-    {
-        vTaskDelay(pdMS_TO_TICKS(20));
-        cdc_acm_host_set_control_line_state(cdc_dev, false, true);
-        ESP_LOGI(TAG, "\t- Control line state set to DTR=false, RTS=true");
-        vTaskDelay(pdMS_TO_TICKS(20));
-        cdc_acm_host_set_control_line_state(cdc_dev, false, false);
-    }
-
-    ESP_LOGI(TAG, "Testing line coding commands");
-    cdc_acm_line_coding_t line_coding;
-    err = cdc_acm_host_line_coding_get(cdc_dev, &line_coding);
-    if (err == ESP_ERR_NOT_SUPPORTED)
-    {
-        ESP_LOGW(TAG, "\t- Line coding get not supported");
-    }
-    else if (err != ESP_OK)
-    {
-        ESP_LOGE(TAG, "\t- Failed to get line coding");
-    }
-    else
-    {
-        ESP_LOGI(TAG, "\t- Line Coding Get: Rate: %" PRIu32 ", Stop bits: %" PRIu8 ", Parity: %" PRIu8 ", Databits: %" PRIu8,
-                 line_coding.dwDTERate, line_coding.bCharFormat, line_coding.bParityType, line_coding.bDataBits);
-        line_coding.dwDTERate = 115200;
-        line_coding.bDataBits = 8;
-        line_coding.bParityType = 0;
-        line_coding.bCharFormat = 0;
-        err = cdc_acm_host_line_coding_set(cdc_dev, &line_coding);
-        if (err != ESP_OK)
-        {
-            ESP_LOGE(TAG, "\t- Failed to set line coding");
-        }
-        else
-        {
-            ESP_LOGI(TAG, "\t- Line Set: Rate: %" PRIu32 ", Stop bits: %" PRIu8 ", Parity: %" PRIu8 ", Databits: %" PRIu8,
-                     line_coding.dwDTERate, line_coding.bCharFormat, line_coding.bParityType, line_coding.bDataBits);
-        }
-    }
-
-    ESP_LOGI(TAG, "Example finished for device in slot %d. You can disconnect or connect another device.", slot);
-}
-
-/**
- * @brief Boot button pressed callback - send APP_QUIT to front of queue.
- */
-static void gpio_cb(void *arg)
-{
-    BaseType_t xTaskWoken = pdFALSE;
-    app_message_t message = {
-        .id = APP_QUIT,
-    };
-
-    if (app_queue)
-    {
-        xQueueSendToFrontFromISR(app_queue, &message, &xTaskWoken);
-    }
-
-    if (xTaskWoken == pdTRUE)
-    {
-        portYIELD_FROM_ISR();
-    }
-}
-
-/**
  * @brief USB Host library handling task.
  */
 static void usb_lib_task(void *arg)
@@ -391,6 +278,7 @@ static void usb_lib_task(void *arg)
 
 void example_app_main(void)
 {
+
     app_queue = xQueueCreate(10, sizeof(app_message_t));
     assert(app_queue);
 
@@ -400,6 +288,7 @@ void example_app_main(void)
 
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
+    init_telemetry_uart();
 
     cdc_acm_host_device_config_t dev_config = {
         .connection_timeout_ms = 0,
@@ -436,7 +325,9 @@ void example_app_main(void)
             }
 
             cdc_devices[slot] = cdc_dev;
-            run_cdc_demo(slot);
+            // creating task to send data back to FC
+            xTaskCreate(elrs_read_task, "elrs_read_task", 4096, (void *)cdc_dev, 10, NULL);
+            // run_cdc_demo(slot);
             break;
         }
 
