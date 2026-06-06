@@ -39,6 +39,7 @@ static cdc_acm_dev_hdl_t cdc_devices[MAX_CDC_DEVICES] = {0};
  * @brief Application queue and its message IDs
  */
 static QueueHandle_t app_queue;
+
 typedef struct
 {
     enum
@@ -266,10 +267,6 @@ void init_USB_host()
  */
 static void usb_lib_task(void *arg)
 {
-    init_USB_host();
-    
-    xTaskNotifyGive(arg); // Notify the main task that the USB host is installed
-
     bool has_clients = true;
     while (1)
     {
@@ -301,11 +298,9 @@ static void usb_lib_task(void *arg)
 
 void configure_USB()
 {
-    BaseType_t task_created = xTaskCreate(usb_lib_task, "usb_lib", 4096, xTaskGetCurrentTaskHandle(),
-                                          EXAMPLE_USB_HOST_PRIORITY, NULL);
+    init_USB_host();
+    BaseType_t task_created = xTaskCreate(usb_lib_task, "usb_lib", 4096, NULL, EXAMPLE_USB_HOST_PRIORITY, NULL);
     assert(task_created == pdTRUE);
-
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 
 void app_main(void)
