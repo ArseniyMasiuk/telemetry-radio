@@ -24,11 +24,11 @@ void elrs_read_task(void *pvParameters)
     while (1)
     {
         // Read data from the RX FIFO buffer
-        int data_len = uart_read_bytes(TELEM_UART_NUM, data, BUF_SIZE, 20 / portTICK_PERIOD_MS);
+        int data_len = uart_read_bytes(TELEM_UART_NUM, data, BUF_SIZE, pdMS_TO_TICKS(5));
 
         if (data_len > 0)
         {
-            ESP_LOG_BUFFER_HEXDUMP(FROM_UART_TAG, data, data_len, ESP_LOG_DEBUG);
+            // ESP_LOG_BUFFER_HEXDUMP(FROM_UART_TAG, data, data_len, ESP_LOG_DEBUG);
 
             esp_err_t err = cdc_acm_host_data_tx_blocking(dev_handle, data, data_len, EXAMPLE_TX_TIMEOUT_MS);
 
