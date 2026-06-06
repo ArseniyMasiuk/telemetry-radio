@@ -23,7 +23,7 @@
 #include "usb/vcp_cp210x.h"
 #include "usb/vcp_ftdi.h"
 
-#include "uart.h"
+#include "telemetry_uart.h"
 
 #define EXAMPLE_USB_HOST_PRIORITY (20)
 #define EXAMPLE_TX_TIMEOUT_MS (1000)
@@ -58,9 +58,6 @@ typedef struct
     } data;
 } app_message_t;
 
-
-
-
 /**
  * @brief Find a free slot in the device table.
  */
@@ -88,7 +85,6 @@ static inline int find_free_slot(void)
  */
 static bool handle_rx(const uint8_t *data, size_t data_len, void *arg)
 {
-    //int slot = (int)arg;
     // ESP_LOGI(TAG, "\t- Data received (slot %d)", slot);
     write_data_to_uart(data, data_len);
 
@@ -245,7 +241,7 @@ static void new_dev_cb(usb_device_handle_t usb_dev)
     }
 }
 
-void configure_USB_host()
+void init_USB_host()
 {
     ESP_LOGI("usb_task", "Running USB task");
     const usb_host_config_t host_config = {
@@ -270,7 +266,7 @@ void configure_USB_host()
  */
 static void usb_lib_task(void *arg)
 {
-    configure_USB_host();
+    init_USB_host();
     
     xTaskNotifyGive(arg); // Notify the main task that the USB host is installed
 
@@ -303,18 +299,23 @@ static void usb_lib_task(void *arg)
     vTaskDelete(NULL);
 }
 
-void app_main(void)
+void configure_USB()
 {
-    app_queue = xQueueCreate(10, sizeof(app_message_t));
-    assert(app_queue);
-
     BaseType_t task_created = xTaskCreate(usb_lib_task, "usb_lib", 4096, xTaskGetCurrentTaskHandle(),
                                           EXAMPLE_USB_HOST_PRIORITY, NULL);
     assert(task_created == pdTRUE);
 
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+}
 
-    init_telemetry_uart();
+void app_main(void)
+{
+    app_queue = xQueueCreate(10, sizeof(app_message_t));
+    assert(app_queue);
+
+    configure_USB();
+
+    configure_telemetry_uart();
 
     cdc_acm_host_device_config_t dev_config = {
         .connection_timeout_ms = 0,
@@ -343,7 +344,6 @@ void app_main(void)
                 continue;
             }
 
-            dev_config.user_arg = (void *)(intptr_t)slot;
             cdc_acm_dev_hdl_t cdc_dev = usb_cdc_device_open(msg.data.new_dev.vid, msg.data.new_dev.pid, &dev_config);
             if (cdc_dev == NULL)
             {

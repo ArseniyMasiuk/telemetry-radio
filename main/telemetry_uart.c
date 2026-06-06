@@ -2,7 +2,7 @@
 #include "esp_err.h"
 #include "esp_log_buffer.h"
 
-#include "uart.h"
+#include "telemetry_uart.h"
 #include "usb/cdc_host_types.h"
 #include "usb/cdc_acm_host.h"
 
@@ -43,7 +43,7 @@ void elrs_read_task(void *pvParameters)
     free(data);
 }
 
-void init_telemetry_uart(void)
+void configure_telemetry_uart(void)
 {
     uart_config_t uart_config = {
         .baud_rate = TELEM_BAUD_RATE,
