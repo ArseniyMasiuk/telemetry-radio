@@ -1,13 +1,16 @@
 | Supported Targets | ESP32-H4 | ESP32-P4 | ESP32-S2 | ESP32-S3 |
 | ----------------- | -------- | -------- | -------- | -------- |
 
-# USB CDC-ACM Host Driver Example
+# USB CDC-ACM Host Driver as telemetry radio
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+This code utilizes USB-OTG functionality of boards listed above.
+Its a tool for a telemetry that allows to plug FC to the board, read telemetry from it, and send it to the RX (or it can be TX configured as RX) flashed with ELRS and set up as telemetry radio.
+This solution is mostly learing project, but also it solves an problem at mu job.
 
-This example shows how to use the CDC-ACM Host Driver to allow an ESP chip to communicate with a USB CDC-ACM device.
+Tested on Matek H743 Wing V3 FC, Radiomaster Nomad TX as GS station radio and Dual Band Gemini RX.
+Planning to make same RX module but Nomad flashed as RX for longer range.
 
-## How to use example
+## How to use
 
 ### Hardware Required
 
@@ -32,26 +35,3 @@ idf.py -p PORT flash monitor
 
 See the Getting Started Guide for full steps to configure and use ESP-IDF to build projects.
 
-## Example Output
-
-After the flashing you should see the output at idf monitor:
-
-```
-...
-I (256) USB-CDC: USB Host installed
-I (256) USB-CDC: Opening CDC ACM device 0x303A:0x4001
-...
-Device descriptor is printed here
-...
-I (1666) USB-CDC: Data received
-I (1666) USB-CDC: 0x3ffc4c20   41 54 0d                                          |AT.|
-I (2666) USB-CDC: Data received
-I (2666) USB-CDC: 0x3ffc4c20   41 54 2b 47 53 4e 0d                              |AT+GSN.|
-I (3666) USB-CDC: Setting up line coding
-I (3666) USB-CDC: Line Get: Rate: 115200, Stop bits: 0, Parity: 0, Databits: 8
-I (3666) USB-CDC: Line Set: Rate: 9600, Stop bits: 1, Parity: 1, Databits: 7
-I (3666) USB-CDC: Line Get: Rate: 9600, Stop bits: 1, Parity: 1, Databits: 7
-I (3676) Example finished successfully!
-...
-
-```
