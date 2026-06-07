@@ -7,6 +7,6 @@
 #define TELEM_BAUD_RATE 460800    // Your exact telemetry radio speed
 #define BUF_SIZE (1024)
 
-extern void configure_telemetry_uart(void);
-extern void elrs_read_task(void *pvParameters);
-extern void write_data_to_uart(const uint8_t *data, size_t data_len);
+void configure_telemetry_uart(void);
+void elrs_read_task(void *pvParameters);
+void write_data_to_uart(const uint8_t *data, size_t data_len);
