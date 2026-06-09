@@ -2,11 +2,19 @@
 #include "esp_err.h"
 #include "esp_log_buffer.h"
 
+#include "driver/uart.h"
 #include "telemetry_uart.h"
 #include "usb/cdc_host_types.h"
+
 #include "usb/cdc_acm_host.h"
 
 #define EXAMPLE_TX_TIMEOUT_MS (1000)
+
+#define TELEM_UART_NUM UART_NUM_1 // Use UART1 to avoid interrupting your USB boot/flash console
+#define TELEM_TX_IO_NUM (17)      // Replace with your physical TX solder pad GPIO
+#define TELEM_RX_IO_NUM (18)      // Replace with your physical RX solder pad GPIO
+#define TELEM_BAUD_RATE 460800    // Your exact telemetry radio speed
+#define BUF_SIZE (1024)
 
 static const char *FROM_UART_TAG = "FROM UART";
 

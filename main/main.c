@@ -14,6 +14,7 @@
 #include "telemetry_uart.h"
 #include "device_queue.h"
 #include "telemetry_ubs_device.h"
+#include "telemetry_wifi.h"
 
 #define EXAMPLE_TX_TIMEOUT_MS (1000)
 #define MAX_CDC_DEVICES (5)
@@ -183,6 +184,8 @@ void app_main(void)
     create_app_queue();
 
     configure_USB();
+
+    setup_wifi();
 
     configure_telemetry_uart();
 
