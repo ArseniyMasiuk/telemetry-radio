@@ -1,2 +1,2 @@
 
-void setup_wifi(void);
+void configure_wifi(void);

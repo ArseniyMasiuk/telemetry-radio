@@ -15,12 +15,13 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "esp_netif_types.h"
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
 #include "telemetry_wifi.h"
-#include "telemetry_wifi.h"
+#include "telemetry_udp_support.h"
 
 /* The examples use WiFi configuration that you can set via project configuration menu.
 
@@ -39,7 +40,7 @@
 #endif
 
 
-#define TELEMETRY_UDP_PORT 14600
+#define TELEMETRY_UDP_PORT 14550
 
 static const char *TAG = "WIFI-MODULE";
 
@@ -73,7 +74,11 @@ static void wifi_ip_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "Client MAC: " MACSTR, MAC2STR(event->mac));
         ESP_LOGI(TAG, "Assigned IP: " IPSTR, IP2STR(&event->ip));
 
-        udp_client_add(event->ip, TELEMETRY_UDP_PORT);
+        char ip_str[16]; // Buffer large enough for "255.255.255.255\0"
+        // Convert to string
+        esp_ip4addr_ntoa(&event->ip, ip_str, sizeof(ip_str));
+
+        udp_client_add(ip_str, TELEMETRY_UDP_PORT);
     }
 }
 

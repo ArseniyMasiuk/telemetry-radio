@@ -4,9 +4,6 @@
 
 #include "driver/uart.h"
 #include "telemetry_uart.h"
-#include "usb/cdc_host_types.h"
-
-#include "usb/cdc_acm_host.h"
 
 #define EXAMPLE_TX_TIMEOUT_MS (1000)
 
@@ -23,34 +20,15 @@ void write_data_to_uart(const uint8_t *data, size_t data_len)
     uart_write_bytes(TELEM_UART_NUM, (const char *)data, data_len);
 }
 
-void read_data_from_uart(cdc_acm_dev_hdl_t dev_handle)
+int read_data_from_uart(uint8_t *data)
 {
-    uint8_t *data = (uint8_t *)malloc(BUF_SIZE);
-
-    while (1)
-    {
-        // Read data from the RX FIFO buffer
-        int data_len = uart_read_bytes(TELEM_UART_NUM, data, BUF_SIZE, pdMS_TO_TICKS(5));
-
-        if (data_len > 0)
-        {
-            // ESP_LOG_BUFFER_HEXDUMP(FROM_UART_TAG, data, data_len, ESP_LOG_DEBUG);
-
-            esp_err_t err = cdc_acm_host_data_tx_blocking(dev_handle, data, data_len, EXAMPLE_TX_TIMEOUT_MS);
-
-            if (err != ESP_OK)
-            {
-                ESP_LOGE(FROM_UART_TAG, "Failed to write data: %s", esp_err_to_name(err));
-            }
-        }
-        // Block briefly to pass control back to the OS scheduler
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-    free(data);
+    return uart_read_bytes(TELEM_UART_NUM, data, BUF_SIZE, pdMS_TO_TICKS(5));
 }
 
 void configure_telemetry_uart(void)
 {
+    ESP_LOGI(FROM_UART_TAG, "Setting up UART port");
+
     uart_config_t uart_config = {
         .baud_rate = TELEM_BAUD_RATE,
         .data_bits = UART_DATA_8_BITS,

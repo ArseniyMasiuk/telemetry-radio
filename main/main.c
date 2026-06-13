@@ -21,8 +21,17 @@
 #define MAX_CDC_DEVICES (5)
 #define ESPRESSIF_VID (0x303A) // 0x303A Espressif VID, used in TinyUSB devices or in USB-Serial-JTAG devices
 
-#define UART_COMMUNICATION
-// #define UDP_WIFI_COMMUNICATION
+
+// #define UART_COMMUNICATION
+#define UDP_WIFI_COMMUNICATION
+
+#ifdef UART_COMMUNICATION
+#define BUF_SIZE 1024
+
+#elifdef UDP_WIFI_COMMUNICATION
+#define BUF_SIZE 128
+
+#endif
 
 static const char *TAG = "USB-CDC-MAIN";
 
@@ -30,14 +39,44 @@ static cdc_acm_dev_hdl_t cdc_devices[MAX_CDC_DEVICES] = {0};
 
 ///===============================================================================================================
 // uplink
+
+int read_data_from_GS(uint8_t *data)
+{
+#ifdef UART_COMMUNICATION
+    return read_data_from_uart(dev_handle);
+#elifdef UDP_WIFI_COMMUNICATION
+    // todo: read data from UDP socket
+    // for now, return 0 as zero bytes read
+    return 0;
+#endif
+}
+
 void GS_to_FC_task(void *pvParameters)
 {
     cdc_acm_dev_hdl_t dev_handle = (cdc_acm_dev_hdl_t)pvParameters;
-#ifdef UART_COMMUNICATION
-    read_data_from_uart(dev_handle);
-#elifdef UDP_WIFI_COMMUNICATION
-    // todo: read data from UDP socket
-#endif
+
+    uint8_t *data = (uint8_t *)malloc(BUF_SIZE);
+
+    while (1)
+    {
+        // Read data from the RX FIFO buffer
+        int data_len = read_data_from_GS(data);
+
+        if (data_len > 0)
+        {
+            ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_DEBUG);
+
+            esp_err_t err = cdc_acm_host_data_tx_blocking(dev_handle, data, data_len, EXAMPLE_TX_TIMEOUT_MS);
+
+            if (err != ESP_OK)
+            {
+                ESP_LOGE(TAG, "Failed to write data: %s", esp_err_to_name(err));
+            }
+        }
+        // Block briefly to pass control back to the OS scheduler
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    free(data);
 }
 
 // downlink
