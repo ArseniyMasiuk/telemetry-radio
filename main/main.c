@@ -17,7 +17,7 @@
 #include "telemetry_wifi.h"
 #include "telemetry_udp_support.h"
 
-#define EXAMPLE_TX_TIMEOUT_MS (1000)
+#define TX_TIMEOUT_MS (1000)
 #define MAX_CDC_DEVICES (5)
 #define ESPRESSIF_VID (0x303A) // 0x303A Espressif VID, used in TinyUSB devices or in USB-Serial-JTAG devices
 
@@ -66,7 +66,7 @@ void GS_to_FC_task(void *pvParameters)
         {
             ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_DEBUG);
 
-            esp_err_t err = cdc_acm_host_data_tx_blocking(dev_handle, data, data_len, EXAMPLE_TX_TIMEOUT_MS);
+            esp_err_t err = cdc_acm_host_data_tx_blocking(dev_handle, data, data_len, TX_TIMEOUT_MS);
 
             if (err != ESP_OK)
             {

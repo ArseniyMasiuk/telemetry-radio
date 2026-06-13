@@ -1,19 +1,17 @@
+#include "driver/uart.h"
+#include "esp_log_buffer.h"
 #include "esp_log.h"
 #include "esp_err.h"
-#include "esp_log_buffer.h"
 
-#include "driver/uart.h"
 #include "telemetry_uart.h"
 
-#define EXAMPLE_TX_TIMEOUT_MS (1000)
-
-#define TELEM_UART_NUM UART_NUM_1 // Use UART1 to avoid interrupting your USB boot/flash console
-#define TELEM_TX_IO_NUM (17)      // Replace with your physical TX solder pad GPIO
-#define TELEM_RX_IO_NUM (18)      // Replace with your physical RX solder pad GPIO
-#define TELEM_BAUD_RATE 460800    // Your exact telemetry radio speed
+#define TELEM_UART_NUM UART_NUM_1
+#define TELEM_TX_IO_NUM (17)
+#define TELEM_RX_IO_NUM (18)
+#define TELEM_BAUD_RATE 460800
 #define BUF_SIZE (1024)
 
-static const char *FROM_UART_TAG = "FROM UART";
+static const char *UART_MODULE = "UART-MODULE";
 
 void write_data_to_uart(const uint8_t *data, size_t data_len)
 {
@@ -27,7 +25,7 @@ int read_data_from_uart(uint8_t *data)
 
 void configure_telemetry_uart(void)
 {
-    ESP_LOGI(FROM_UART_TAG, "Setting up UART port");
+    ESP_LOGI(UART_MODULE, "Setting up UART port");
 
     uart_config_t uart_config = {
         .baud_rate = TELEM_BAUD_RATE,

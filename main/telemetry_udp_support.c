@@ -12,6 +12,7 @@
 
 #define MAX_CLIENTS 10
 #define RX_BUFFER_SIZE 128
+#define TELEMETRY_UDP_PORT 14550
 
 static const char *TAG = "UDP_SERVER";
 
@@ -21,6 +22,7 @@ typedef struct
     struct sockaddr_in dest_addr;
     int sock;
     bool is_active;
+    uint8_t mac_addr[6];
 } udp_client_t;
 
 // Global array and mutex for safety
@@ -34,7 +36,7 @@ void configure_udp_manager(void)
     memset(clients, 0, sizeof(clients));
 }
 
-bool udp_client_add(const char *ip_str, uint16_t port)
+bool udp_client_add(const char *ip_str, uint8_t mac_addr[6])
 {
     if (!client_mutex)
         return false;
@@ -71,38 +73,37 @@ bool udp_client_add(const char *ip_str, uint16_t port)
     // Configure the client endpoint struct
     clients[slot].dest_addr.sin_addr.s_addr = inet_addr(ip_str);
     clients[slot].dest_addr.sin_family = AF_INET;
-    clients[slot].dest_addr.sin_port = htons(port);
+    clients[slot].dest_addr.sin_port = htons(TELEMETRY_UDP_PORT);
     clients[slot].sock = sock;
     clients[slot].is_active = true;
+    memcpy(clients[slot].mac_addr, mac_addr, sizeof(uint8_t) * 6);
 
-    ESP_LOGI(TAG, "Client added to slot %d -> %s:%d (Sock: %d)", slot, ip_str, port, sock);
+    ESP_LOGI(TAG, "Client added to slot %d -> %s:%d (Sock: %d)", slot, ip_str, TELEMETRY_UDP_PORT, sock);
 
     xSemaphoreGive(client_mutex);
     return true;
 }
 
-void udp_client_remove(const char *ip_str)
+void udp_client_remove(uint8_t target_mac_addr[6])
 {
     if (!client_mutex)
         return;
 
     xSemaphoreTake(client_mutex, portMAX_DELAY);
 
-    uint32_t target_ip = inet_addr(ip_str);
-
     for (int i = 0; i < MAX_CLIENTS; i++)
     {
-        if (clients[i].is_active && clients[i].dest_addr.sin_addr.s_addr == target_ip)
+        if (clients[i].is_active && memcmp(clients[i].mac_addr, target_mac_addr, 6) == 0)
         {
+            ESP_LOGI(TAG, "Removed client %s from slot %d", inet_ntoa(clients[i].dest_addr.sin_addr), i);
             // Close the active socket cleanly
             if (clients[i].sock >= 0)
             {
                 close(clients[i].sock);
             }
-            clients[i].is_active = false;
-            clients[i].sock = -1;
-            ESP_LOGI(TAG, "Removed client %s from slot %d", ip_str, i);
-            break;
+                clients[i].is_active = false;
+                clients[i].sock = -1;
+                break;
         }
     }
 

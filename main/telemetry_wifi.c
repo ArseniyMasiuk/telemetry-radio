@@ -1,11 +1,3 @@
-/*  WiFi softAP Example
-
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -23,24 +15,16 @@
 #include "telemetry_wifi.h"
 #include "telemetry_udp_support.h"
 
-/* The examples use WiFi configuration that you can set via project configuration menu.
-
-   If you'd rather not, just change the below entries to strings with
-   the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
-*/
-#define EXAMPLE_ESP_WIFI_SSID       "Telemetry-For-Everyone"    // Put your hotspot name here
-#define EXAMPLE_ESP_WIFI_PASS       "iwanttelemetry"          // Put a password here (min 8 characters)
+#define EXAMPLE_ESP_WIFI_SSID       "Telemetry-For-Everyone" 
+#define EXAMPLE_ESP_WIFI_PASS       "iwanttelemetry"
 #define EXAMPLE_ESP_WIFI_CHANNEL    6                   // Type your channel number here (1 to 13)
-#define EXAMPLE_MAX_STA_CONN        4                   // Max number of devices allowed
+#define EXAMPLE_MAX_STA_CONN        5                   // Max number of devices allowed
 
 #if CONFIG_ESP_GTK_REKEYING_ENABLE
 #define EXAMPLE_GTK_REKEY_INTERVAL CONFIG_ESP_GTK_REKEY_INTERVAL
 #else
 #define EXAMPLE_GTK_REKEY_INTERVAL 0
 #endif
-
-
-#define TELEMETRY_UDP_PORT 14550
 
 static const char *TAG = "WIFI-MODULE";
 
@@ -58,6 +42,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         wifi_event_ap_stadisconnected_t *event = (wifi_event_ap_stadisconnected_t *)event_data;
         ESP_LOGI(TAG, "station " MACSTR " leave, AID=%d, reason=%d",
                  MAC2STR(event->mac), event->aid, event->reason);
+
+        udp_client_remove(event->mac);
     }
 }
 
@@ -78,15 +64,15 @@ static void wifi_ip_event_handler(void *arg, esp_event_base_t event_base,
         // Convert to string
         esp_ip4addr_ntoa(&event->ip, ip_str, sizeof(ip_str));
 
-        udp_client_add(ip_str, TELEMETRY_UDP_PORT);
+        udp_client_add(ip_str, event->mac);
     }
 }
 
 void init_event_handlers(void)
 {
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,                       // <--- The core event base
-                                                        IP_EVENT_ASSIGNED_IP_TO_CLIENT, // <--- The specific ID
-                                                        &wifi_ip_event_handler,         // Your callback function
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_ASSIGNED_IP_TO_CLIENT,
+                                                        &wifi_ip_event_handler,
                                                         NULL,
                                                         NULL));
 
