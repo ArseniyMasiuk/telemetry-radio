@@ -15,19 +15,53 @@
 #include "device_queue.h"
 #include "telemetry_ubs_device.h"
 #include "telemetry_wifi.h"
+#include "telemetry_udp_support.h"
 
 #define EXAMPLE_TX_TIMEOUT_MS (1000)
 #define MAX_CDC_DEVICES (5)
 #define ESPRESSIF_VID (0x303A) // 0x303A Espressif VID, used in TinyUSB devices or in USB-Serial-JTAG devices
 
+#define UART_COMMUNICATION
+// #define UDP_WIFI_COMMUNICATION
+
 static const char *TAG = "USB-CDC-MAIN";
 
-/** Open CDC device handles; NULL means slot is free. Needed for APP_QUIT (close all) and to clear slot on disconnect. */
 static cdc_acm_dev_hdl_t cdc_devices[MAX_CDC_DEVICES] = {0};
 
-/**
- * @brief Find a free slot in the device table.
- */
+///===============================================================================================================
+// uplink
+void GS_to_FC_task(void *pvParameters)
+{
+    cdc_acm_dev_hdl_t dev_handle = (cdc_acm_dev_hdl_t)pvParameters;
+#ifdef UART_COMMUNICATION
+    read_data_from_uart(dev_handle);
+#elifdef UDP_WIFI_COMMUNICATION
+    // todo: read data from UDP socket
+#endif
+}
+
+// downlink
+void FC_TO_GS_task(const uint8_t *data, size_t data_len)
+{
+#ifdef UART_COMMUNICATION
+    write_data_to_uart(data, data_len);
+#elifdef UDP_WIFI_COMMUNICATION
+    udp_send_all(data, data_len);
+#endif
+}
+
+void setup_communications()
+{
+#ifdef UART_COMMUNICATION
+    configure_telemetry_uart();
+#elifdef UDP_WIFI_COMMUNICATION
+    configure_wifi();
+
+    configure_udp_manager();
+#endif
+}
+
+///===============================================================================================================
 static inline int find_free_slot(void)
 {
     for (int i = 0; i < MAX_CDC_DEVICES; i++)
@@ -40,33 +74,14 @@ static inline int find_free_slot(void)
     return -1;
 }
 
-/**
- * @brief Data received callback
- *
- * @param[in] data     Pointer to received data
- * @param[in] data_len Length of received data in bytes
- * @param[in] arg      Argument we passed to the device open function
- * @return
- *   true:  We have processed the received data
- *   false: We expect more data
- */
-static bool handle_rx(const uint8_t *data, size_t data_len, void *arg)
+static bool handle_data_from_USB(const uint8_t *data, size_t data_len, void *arg)
 {
-    // ESP_LOGI(TAG, "\t- Data received (slot %d)", slot);
-    write_data_to_uart(data, data_len);
+    FC_TO_GS_task(data, data_len);
 
-    // ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_INFO);
+    ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_DEBUG);
     return true;
 }
 
-/**
- * @brief Device event callback
- *
- * Forwards disconnection to app queue
- *
- * @param[in] event    Device event type and data
- * @param[in] user_ctx Argument we passed to the device open function
- */
 static void handle_event(const cdc_acm_host_dev_event_data_t *event, void *user_ctx)
 {
     switch (event->type)
@@ -105,9 +120,6 @@ void log_usb_cdc_device_open(char *success_string, char *failure_string, esp_err
         ESP_LOGE(TAG, "%s %s", failure_string, esp_err_to_name(err));
 }
 
-/**
-* @brief Open CDC device by VID/PID using the appropriate driver.
-*/
 static cdc_acm_dev_hdl_t usb_cdc_device_open(uint16_t vid, uint16_t pid,
                                              const cdc_acm_host_device_config_t *dev_config)
 {
@@ -185,9 +197,7 @@ void app_main(void)
 
     configure_USB();
 
-    setup_wifi();
-
-    configure_telemetry_uart();
+    setup_communications();
 
     cdc_acm_host_device_config_t dev_config = {
         .connection_timeout_ms = 0,
@@ -195,7 +205,7 @@ void app_main(void)
         .in_buffer_size = 512,
         .user_arg = NULL,
         .event_cb = handle_event,
-        .data_cb = handle_rx};
+        .data_cb = handle_data_from_USB};
 
     ESP_LOGI("app_main", "Waiting for CDC devices.");
 
@@ -224,7 +234,7 @@ void app_main(void)
 
             cdc_devices[slot] = cdc_dev;
             // creating task to send data back to FC
-            xTaskCreate(elrs_read_task, "elrs_read_task", 4096, (void *)cdc_dev, 5, NULL);
+            xTaskCreate(GS_to_FC_task, "GS to FC task", 4096, (void *)cdc_dev, 5, NULL);
             break;
         }
 

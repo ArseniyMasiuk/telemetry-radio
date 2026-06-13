@@ -20,6 +20,7 @@
 #include "lwip/sys.h"
 
 #include "telemetry_wifi.h"
+#include "telemetry_wifi.h"
 
 /* The examples use WiFi configuration that you can set via project configuration menu.
 
@@ -36,6 +37,9 @@
 #else
 #define EXAMPLE_GTK_REKEY_INTERVAL 0
 #endif
+
+
+#define TELEMETRY_UDP_PORT 14600
 
 static const char *TAG = "WIFI-MODULE";
 
@@ -68,6 +72,8 @@ static void wifi_ip_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "===================== New Client Connected! ========================");
         ESP_LOGI(TAG, "Client MAC: " MACSTR, MAC2STR(event->mac));
         ESP_LOGI(TAG, "Assigned IP: " IPSTR, IP2STR(&event->ip));
+
+        udp_client_add(event->ip, TELEMETRY_UDP_PORT);
     }
 }
 
@@ -136,7 +142,7 @@ void wifi_init_softap(void)
              EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS, EXAMPLE_ESP_WIFI_CHANNEL);
 }
 
-void setup_wifi(void)
+void configure_wifi(void)
 {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)

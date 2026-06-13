@@ -23,10 +23,8 @@ void write_data_to_uart(const uint8_t *data, size_t data_len)
     uart_write_bytes(TELEM_UART_NUM, (const char *)data, data_len);
 }
 
-void elrs_read_task(void *pvParameters)
+void read_data_from_uart(cdc_acm_dev_hdl_t dev_handle)
 {
-    cdc_acm_dev_hdl_t dev_handle = (cdc_acm_dev_hdl_t)pvParameters;
-
     uint8_t *data = (uint8_t *)malloc(BUF_SIZE);
 
     while (1)
