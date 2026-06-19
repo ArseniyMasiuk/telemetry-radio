@@ -32,18 +32,20 @@ The same codebase is flashed with different compile-time settings to act as eith
 
 ### Role selection (`main/main.c`)
 
-Only **one** transport define should be active per build:
+Exactly **one** define must be active per build. A `#error` guard in `main.c` prevents enabling more than one at a time.
+
+| Define | Role |
+|--------|------|
+| `UART_COMMUNICATION` | Air Module |
+| `UDP_WIFI_COMMUNICATION` | Ground Module |
+| `ELRS_TX_HOST_MODE` | TX Host Module |
+
+Example (Air Module build):
 
 ```c
-#define UART_COMMUNICATION        // Air Module — ELRS RX via UART
-// #define UDP_WIFI_COMMUNICATION  // Ground Module — WiFi AP + UDP to Mission Planner
-```
-
-Or:
-
-```c
-// #define UART_COMMUNICATION
-#define UDP_WIFI_COMMUNICATION    // Ground Module — WiFi AP + UDP to Mission Planner
+#define UART_COMMUNICATION
+// #define UDP_WIFI_COMMUNICATION
+// #define ELRS_TX_HOST_MODE
 ```
 
 ## System Overview
@@ -129,25 +131,40 @@ USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`.
 
 ## Source Files
 
+### Air Module / Ground Module
+
 | File | Role |
 |------|------|
-| `main/main.c` | Entry point, role selection (defines), CDC management, MAVLink bridge tasks |
+| `main/main.c` | Entry point, role selection (`#define`s + `#error` guard), CDC management, MAVLink bridge tasks |
 | `main/telemetry_ubs_device.c` | USB host + CDC-ACM install, device hotplug callback |
 | `main/device_queue.c` / `.h` | FreeRTOS queue for app events (connect/disconnect/quit) |
-| `main/telemetry_uart.c` / `.h` | UART transport — **Air Module** |
+| `main/telemetry_uart.c` / `.h` | UART1 transport (GPIO17/18, 460800 baud) — **Air Module** |
 | `main/telemetry_wifi.c` / `.h` | WiFi soft-AP — **Ground Module** |
 | `main/telemetry_udp_support.c` / `.h` | UDP client registry and send — **Ground Module** |
+
+### TX Host Module
+
+| File | Role |
+|------|------|
+| `ground_unit/tx_module/crsf_protocol.c` / `.h` | CRSF frame build/parse, CRC8 (poly `0xD5`), all frame type/address constants |
+| `ground_unit/tx_module/elrs_tx_uart.c` / `.h` | UART2 @ GPIO4/5, 420000 baud, optional line inversion (`ELRS_TX_UART_INVERTED`) |
+| `ground_unit/tx_module/elrs_tx_host.c` / `.h` | RC emulation task (`crsf_tx_task`), RX parser task (`crsf_rx_task`), link stats logging |
+| `ground_unit/tx_module/elrs_tx_params.c` / `.h` | Parameter discovery + C API + boot log dump |
 
 ## Build System
 
 - **Framework:** ESP-IDF (CMake, `MINIMAL_BUILD ON`)
 - **Project name:** `telemetry-radio`
-- **Component deps** (`main/idf_component.yml`):
+- **Component layout:**
+  - `main/` — Air/Ground Module sources + entry point (all roles)
+  - `ground_unit/tx_module/` — TX Host Module as a standalone IDF component; registered via `EXTRA_COMPONENT_DIRS` in root `CMakeLists.txt`
+- **Component deps** (`main/idf_component.yml` — Air/Ground Module only):
   - `usb_host_cdc_acm` ^2.3
   - `usb_host_ch34x_vcp` ^2.2
   - `usb_host_cp210x_vcp` ^2.2
   - `usb_host_ftdi_vcp` ^2.1
-- **IDF components required:** `esp_driver_uart`, `esp_wifi`, `nvs_flash`
+- **IDF components required (`main`):** `esp_driver_uart`, `esp_wifi`, `nvs_flash`, `tx_module`
+- **IDF components required (`tx_module`):** `esp_driver_uart`
 
 ### Build & flash
 
@@ -162,7 +179,7 @@ Flash **Air Module** and **Ground Module** builds separately with the appropriat
 - `.devcontainer/` — ESP-IDF Docker devcontainer with Espressif VS Code extensions
 - `.vscode/` — launch, C/C++ properties, settings
 
-## TX Host Module (planned — in progress)
+## TX Host Module (implemented — enable `ELRS_TX_HOST_MODE` in `main.c`)
 
 Third build role: ESP32-S3 connected to the **internal TX/RX pads** of a detached **Radiomaster Nomad** ELRS TX module running **ELRS 4.0**. TX and RX are already configured with the **same regulatory domain** and **same binding phrase** — no special bind-mode command flow is needed.
 
@@ -188,7 +205,9 @@ Third build role: ESP32-S3 connected to the **internal TX/RX pads** of a detache
 | Protocol | CRSF (handset side) |
 | Prerequisite | TX and RX: same regulatory domain + binding phrase |
 
-### Build flag (planned)
+### Build flag
+
+Enable in `main/main.c` — only one role active at a time:
 
 ```c
 // #define UART_COMMUNICATION      // Air Module
@@ -196,111 +215,96 @@ Third build role: ESP32-S3 connected to the **internal TX/RX pads** of a detache
 #define ELRS_TX_HOST_MODE         // TX Host Module — CRSF handset for Nomad TX
 ```
 
+A `#error` guard prevents enabling more than one role simultaneously.
+
 ### Architecture
 
 ```
-┌─────────────────┐   UART (CRSF)    ┌──────────────────────┐   RF (ELRS 4.0)   ┌─────────────┐
+┌─────────────────┐   UART2 (CRSF)   ┌──────────────────────┐   RF (ELRS 4.0)   ┌─────────────┐
 │  ESP32-S3       │ ◄──────────────► │  Radiomaster Nomad   │ ────────────────► │  ELRS RX    │
 │  TX Host Module │  emulate remote  │  TX module (pads)    │  search + link    │  (aircraft) │
-└────────┬────────┘                  └──────────────────────┘                   └─────────────┘
-         │
+└────────┬────────┘  GPIO 4/5        └──────────────────────┘                   └─────────────┘
+         │           420000 baud
+         └── serial logs: link stats every 1s (RSSI, LQ, SNR)
          └── serial logs: all TX params on boot
-         └── C API: elrs_tx_get_params() etc. (display layer TBD)
+         └── C API: elrs_tx_params_get() — display layer TBD
 ```
 
-### Implementation plan
+### Source files
 
-#### Phase 0 — Hardware validation (before coding)
+All under `ground_unit/tx_module/` (IDF component `tx_module`):
 
-Sniff Nomad pads with handset connected (or logic analyzer) to confirm:
+| File | Status | Role |
+|------|--------|------|
+| `crsf_protocol.c/h` | **Done** | CRSF frame build/parse, CRC8, all frame types and addresses |
+| `elrs_tx_uart.c/h` | **Done** | UART2 @ GPIO4/5, 420000 baud, optional inversion |
+| `elrs_tx_host.c/h` | **Done** | RC emulation task, RX parser task, link stats; arm/collect API |
+| `elrs_tx_params.c/h` | **Done** | Parameter fetch (multi-chunk reassembly) + C API + boot log dump |
 
-- Baud rate (start with **420000** / **400000**)
-- Line inversion (Nomad module bay pads are often inverted CRSF)
-- Separate TX/RX vs half-duplex single wire
-- Power-on frame sequence from EdgeTX
-
-**Deliverable:** `docs/elrs-nomad-sniff-notes.md` with sample frames.
-
-#### Phase 1 — CRSF transport (`crsf_protocol.c/h`, `elrs_tx_uart.c/h`)
-
-- Dedicated UART (do not reuse Air Module MAVLink pins/baud)
-- Frame parser: sync `0xC8`, len, type, CRC8 (poly `0xD5`), extended frames for types ≥ `0x28`
-- Frame builders: `0x16` RC_CHANNELS_PACKED, `0x28` DEVICE_PING, `0x2C` PARAMETER_READ
-- RX ring buffer + parser task
-
-#### Phase 2 — Handset emulation → TX searches for RX
-
-- **CRSF TX task:** send `0x16` RC_CHANNELS_PACKED at ~50–250 Hz (neutral sticks)
-- **CRSF RX task:** parse `0x14` LINK_STATISTICS — log LQ/RSSI to confirm OTA link
-- Success: Nomad does not enter WiFi timeout; serial shows link stats when RX is powered
-
-No bind command packets — matching domain + phrase + continuous RC is sufficient for ELRS 4.0.
-
-#### Phase 3 — Parameter API + boot log dump
-
-Mirror EdgeTX Lua discovery flow (read-only for now):
-
-1. `0x28` DEVICE_PING → `0x29` DEVICE_INFO (name, HW/SW version, param count)
-2. Read folder index `0x00`, enumerate children `0x01…N` via `0x2C` / `0x2B`
-3. Parse all parameter types (UINT, TEXT_SELECTION, COMMAND, FOLDER, INFO, etc.)
-4. Store in structured in-memory table
-
-**C API (planned):**
+### C API
 
 ```c
+// Initialise and start handset emulation (call once at boot)
 esp_err_t elrs_tx_host_init(void);
-esp_err_t elrs_tx_host_start(void);          // starts RC emulation + RX parser
-esp_err_t elrs_tx_params_fetch_all(void);    // blocking query of all params
+esp_err_t elrs_tx_host_start(void);
+
+// Blocking parameter fetch — call after start()
+esp_err_t elrs_tx_params_fetch_all(void);
+
+// Access cached parameters at any time after fetch
 const elrs_tx_params_t *elrs_tx_params_get(void);
-void elrs_tx_params_log_all(void);           // called on boot after fetch — dumps to ESP_LOGI
+
+// Dump everything to ESP_LOGI — called once at boot
+void elrs_tx_params_log_all(void);
 ```
 
-**Boot sequence:**
+### Boot sequence (implemented)
 
 ```
-power on → UART init → start RC stream → wait for DEVICE_INFO →
-fetch all parameters → elrs_tx_params_log_all() → continue running (RC + link stats)
+power on
+  → elrs_tx_host_init()     UART2 init, parser init, mutex/semaphore create
+  → elrs_tx_host_start()    spawn crsf_rx_task (pri 10) + crsf_tx_task (pri 9)
+       crsf_tx_task          sends 0x16 RC_CHANNELS_PACKED every 10 ms (neutral sticks)
+       crsf_rx_task          reads UART, feeds parser, dispatches frame callbacks
+  → 500 ms settle
+  → elrs_tx_params_fetch_all()
+       send 0x28 DEVICE_PING
+       wait for 0x29 DEVICE_INFO  (device name, HW/SW ver, param count)
+       for each param index 0..N:
+           send 0x2C PARAMETER_READ (chunk 0)
+           wait for 0x2B PARAMETER_SETTINGS_ENTRY
+           if chunks_remaining > 0: request and accumulate remaining chunks (multi-chunk reassembly implemented)
+           parse into elrs_tx_param_entry_t (name, type, value as string)
+  → elrs_tx_params_log_all()  single structured dump to serial
+  → loop forever
+       crsf_rx_task logs 0x14 LINK_STATISTICS every 1 s (RSSI1/2, LQ, SNR)
 ```
 
-Display/UI (web, screen, etc.) will consume `elrs_tx_params_get()` later — not in initial scope.
+Display/UI (web, screen, etc.) will consume `elrs_tx_params_get()` later.
 
-#### Phase 4 — Integration
+### Bring-up checklist (hardware still needs testing)
 
-- Wire into `app_main` behind `ELRS_TX_HOST_MODE` (no USB host needed for this build)
-- Add new sources to `main/CMakeLists.txt`
-- Optional later: expose API over Ground Module WiFi
+- [ ] Connect Nomad internal pads to ESP GPIO 4 (TX) and GPIO 5 (RX)
+- [ ] Flash with `ELRS_TX_HOST_MODE` enabled
+- [ ] Confirm Nomad is in **CRSF** link mode, not MAVLink (ELRS Configurator 4.0)
+- [ ] Check monitor for `ELRS-TX-HOST: Handset emulation started`
+- [ ] If no `DEVICE_INFO` response → try `ELRS_TX_UART_INVERTED 1` in `ground_unit/tx_module/elrs_tx_uart.h`
+- [ ] If still no response → swap GPIO 4/5 (TX/RX reversed on pad)
+- [ ] Confirm link stats appear once RX is powered (`RSSI1`, `LQ` in logs)
 
-### New source files (planned)
+### Remaining / future work
 
-| File | Role |
-|------|------|
-| `crsf_protocol.c/h` | CRSF frame build, parse, CRC, addresses |
-| `elrs_tx_uart.c/h` | Nomad-specific UART config (baud, inversion, pins) |
-| `elrs_tx_host.c/h` | Handset emulation state machine, RC TX task |
-| `elrs_tx_params.c/h` | Parameter discovery, storage, API, boot log dump |
-
-### Risks
-
-| Risk | Mitigation |
-|------|------------|
-| Wrong baud/inversion on Nomad pads | Phase 0 sniff; baud fallback list |
-| ELRS 4.0 param layout differs from 3.x | Discover via folder `0x00`, never hardcode indices |
-| TX in MAVLink link mode instead of CRSF | Confirm Nomad config in ELRS Configurator 4.0 |
-| Parameter fetch slow at boot | Log progress; run fetch once, cache in RAM |
-
-### Sprint order
-
-| Sprint | Output |
-|--------|--------|
-| 0 | Nomad UART sniff notes |
-| 1 | CRSF parser + UART driver |
-| 2 | RC emulation, TX links to RX, link stats in log |
-| 3 | Parameter API + `elrs_tx_params_log_all()` on boot |
-| 4 | Build flag, CMake, docs |
+| Item | Priority |
+|------|----------|
+| Hardware bring-up and pin confirmation | **Now** |
+| Inversion flag validation on real Nomad | **Now** |
+| Parameter write (`0x2D`) to change TX config | Future |
+| Expose param API over Ground Module WiFi/UDP | Future |
+| Display layer (screen, web UI) | Future |
 
 ## Known Gaps / TODOs
 
-1. **TX Host Module** — not yet implemented (see plan above).
+1. **TX Host Module — hardware bring-up** — code is implemented and reviewed; GPIO pins (4/5) and inversion flag still need confirmation on real Nomad hardware (see bring-up checklist above).
 2. **Ground Module uplink not implemented** — `read_data_from_GS` returns 0; Mission Planner commands cannot reach the FC over UDP yet.
 3. **`udp_read_all`** — receive path stubbed; not wired into `GS_to_FC_task`.
 4. **Air Module** — basic version works; speed and bug audit deferred.
@@ -309,11 +313,33 @@ Display/UI (web, screen, etc.) will consume `elrs_tx_params_get()` later — not
 
 ## Conventions & Notes
 
-- Logging tags: `USB-CDC-MAIN`, `USB-CDC`, `WIFI-MODULE`, `UDP_SERVER`, `UART-MODULE`
-- FreeRTOS tasks: `usb_lib` (priority 20), `GS to FC task` (priority 5)
+### Logging tags
+
+| Tag | Module |
+|-----|--------|
+| `USB-CDC-MAIN` | `main.c` |
+| `USB-CDC` | `telemetry_ubs_device.c` |
+| `WIFI-MODULE` | `telemetry_wifi.c` |
+| `UDP_SERVER` | `telemetry_udp_support.c` |
+| `UART-MODULE` | `telemetry_uart.c` |
+| `ELRS-TX-MAIN` | `main.c` (TX Host role) |
+| `ELRS-TX-HOST` | `ground_unit/tx_module/elrs_tx_host.c` |
+| `ELRS-TX-UART` | `ground_unit/tx_module/elrs_tx_uart.c` |
+| `ELRS-TX-PARAMS` | `ground_unit/tx_module/elrs_tx_params.c` |
+
+### FreeRTOS tasks
+
+| Task name | Priority | Source |
+|-----------|----------|--------|
+| `usb_lib` | 20 | `telemetry_ubs_device.c` |
+| `GS to FC task` | 5 | `main.c` |
+| `elrs_crsf_rx` | 10 | `ground_unit/tx_module/elrs_tx_host.c` |
+| `elrs_crsf_tx` | 9 | `ground_unit/tx_module/elrs_tx_host.c` |
+
+### General
 - CDC TX timeout: 1000 ms (`TX_TIMEOUT_MS`)
 - WiFi credentials and UDP port are hardcoded — no NVS/config UI yet
-- When editing, match existing C style: minimal comments, `ESP_ERROR_CHECK` for fatal init errors, `ESP_LOG*` for diagnostics
+- When editing, match existing C style: minimal comments, `ESP_ERROR_CHECK` for truly fatal init errors only (not for operations that can legitimately fail at runtime), `ESP_LOG*` for diagnostics
 
 ## Related Docs
 

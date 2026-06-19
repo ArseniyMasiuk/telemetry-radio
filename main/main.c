@@ -1,3 +1,50 @@
+// Enable exactly one module role:
+// #define UART_COMMUNICATION      // Air Module
+// #define UDP_WIFI_COMMUNICATION  // Ground Module
+// #define ELRS_TX_HOST_MODE       // TX Host Module — CRSF handset for Nomad TX
+
+#if defined(ELRS_TX_HOST_MODE) && (defined(UART_COMMUNICATION) || defined(UDP_WIFI_COMMUNICATION))
+#error "Enable only one module role: ELRS_TX_HOST_MODE, UART_COMMUNICATION, or UDP_WIFI_COMMUNICATION"
+#endif
+
+#ifdef ELRS_TX_HOST_MODE
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_err.h"
+
+#include "elrs_tx_host.h"
+#include "elrs_tx_params.h"
+
+static const char *TAG = "ELRS-TX-MAIN";
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "ELRS TX Host Module starting");
+
+    ESP_ERROR_CHECK(elrs_tx_host_init());
+    ESP_ERROR_CHECK(elrs_tx_host_start());
+
+    esp_err_t err = elrs_tx_params_fetch_all();
+    if (err == ESP_OK)
+    {
+        elrs_tx_params_log_all();
+    }
+    else
+    {
+        ESP_LOGW(TAG, "Parameter fetch failed: %s (RC emulation continues)", esp_err_to_name(err));
+    }
+
+    ESP_LOGI(TAG, "Running — RC emulation active, link stats logged every 1s");
+    while (1)
+    {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+#else
+
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
@@ -24,6 +71,7 @@
 
 // #define UART_COMMUNICATION
 #define UDP_WIFI_COMMUNICATION
+// #define ELRS_TX_HOST_MODE
 
 #ifdef UART_COMMUNICATION
 #define BUF_SIZE 1024
@@ -301,3 +349,5 @@ void app_main(void)
     ESP_LOGI("app_main", "\t- Exit completed");
     delete_app_queue();
 }
+
+#endif /* ELRS_TX_HOST_MODE */
