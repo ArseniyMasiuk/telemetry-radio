@@ -69,8 +69,8 @@ AIR MODULE (UART_COMMUNICATION)                GROUND MODULE (UDP_WIFI_COMMUNICA
 
 | Direction | Description | Task / function |
 |-----------|-------------|-----------------|
-| FC → GS (downlink) | MAVLink from FC USB → outbound transport | `handle_data_from_USB` → `air_to_ground_task` |
-| GS → FC (uplink) | MAVLink from inbound transport → FC USB | `ground_to_air_task` → `read_data_from_ground` → `cdc_acm_host_data_tx_blocking` |
+| FC → GS (downlink) | MAVLink from FC USB → outbound transport | `handle_data_from_USB` → `air_to_ground` |
+| GS → FC (uplink) | MAVLink from inbound transport → FC USB | `ground_to_air` → `read_data_from_ground` → `cdc_acm_host_data_tx_blocking` |
 
 | Module | Downlink transport | Uplink transport |
 |--------|-------------------|------------------|
@@ -124,7 +124,7 @@ Primary target: **ESP32-S3** with USB-OTG host. Up to **5 concurrent CDC devices
    a. Create USB host message queue (`usb_host_queue`)
    b. Start USB host + CDC-ACM driver (`configure_USB`)
    c. Block on queue messages:
-      - `USB_HOST_DEVICE_CONNECTED` — open CDC device, spawn `ground_to_air_task`
+      - `USB_HOST_DEVICE_CONNECTED` — open CDC device, spawn `ground_to_air`
       - `USB_HOST_DEVICE_DISCONNECTED` — close device slot
       - `USB_HOST_QUIT` — tear down and exit
 
@@ -136,7 +136,7 @@ USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`.
 
 | File | Role |
 |------|------|
-| `main/main.c` | Entry point, role selection (`#define`s + `#error` guard), data routing tasks (`ground_to_air_task`, `air_to_ground_task`, `handle_data_from_USB`) |
+| `main/main.c` | Entry point, role selection (`#define`s + `#error` guard), data routing tasks (`ground_to_air`, `air_to_ground`, `handle_data_from_USB`) |
 | `common/usb_host/usb_cdc_manager.c` / `.h` | CDC device lifecycle: slot management, VCP open dispatch, event handling, `start_main_USB_task()` |
 | `common/usb_host/telemetry_ubs_device.c` / `.h` | USB host + CDC-ACM install, device hotplug callback |
 | `common/usb_host/usb_host_queue.c` / `.h` | FreeRTOS queue for USB host events (`usb_host_message_t`, connect/disconnect/quit) |
@@ -338,7 +338,7 @@ Display/UI (web, screen, etc.) will consume `elrs_tx_params_get()` later.
 ## Known Gaps / TODOs
 
 1. **Ground Module uplink not implemented** — `read_data_from_GS` returns 0; Mission Planner commands cannot reach the FC over UDP yet.
-2. **`udp_read_all`** — receive path stubbed; not wired into `ground_to_air_task`.
+2. **`udp_read_all`** — receive path stubbed; not wired into `ground_to_air`.
 3. **Air Module** — basic version works; speed and bug audit deferred.
 4. **Typo in filename** — `telemetry_ubs_device.c` (likely meant `usb`); keep name unless renaming intentionally. File now lives in `common/usb_host/`.
 5. **README** references external ESP-IDF USB examples that may not exist in this standalone repo.

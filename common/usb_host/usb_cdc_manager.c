@@ -12,14 +12,15 @@
 #include "telemetry_ubs_device.h"
 #include "usb_cdc_manager.h"
 
-#define ESPRESSIF_VID (0x303A)
+#define ESPRESSIF_VID    (0x303A)
+#define TX_TIMEOUT_MS    (1000)
 
 static const char *TAG = "USB-CDC-MAIN";
 
 static cdc_acm_dev_hdl_t cdc_devices[MAX_CDC_DEVICES] = {0};
 
 /* Defined in main.c; will be decoupled in a later refactor */
-extern void ground_to_air_task(void *pvParameters);
+extern void ground_to_air(void *pvParameters);
 
 static inline int find_free_slot(void)
 {
@@ -131,6 +132,15 @@ static void free_cdc_device(int slot)
     cdc_devices[slot] = NULL;
 }
 
+esp_err_t usb_cdc_write(int slot, const uint8_t *data, size_t len)
+{
+    if (slot < 0 || slot >= MAX_CDC_DEVICES || cdc_devices[slot] == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return cdc_acm_host_data_tx_blocking(cdc_devices[slot], data, len, TX_TIMEOUT_MS);
+}
+
 static void free_all_cdc_devices(void)
 {
     for (int i = 0; i < MAX_CDC_DEVICES; i++)
@@ -181,8 +191,7 @@ void start_main_USB_task(cdc_acm_data_callback_t usb_device_data_handler)
             }
 
             cdc_devices[slot] = cdc_dev;
-            // creating task to send data back to FC
-            xTaskCreate(ground_to_air_task, "ground to air task", 4096, (void *)cdc_dev, 5, NULL);
+            xTaskCreate(ground_to_air, "ground to air task", 4096, (void *)(intptr_t)slot, 5, NULL);
             break;
         }
 

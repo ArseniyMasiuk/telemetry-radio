@@ -14,11 +14,6 @@
 #include "esp_log.h"
 #include "esp_err.h"
 
-#include "usb/cdc_acm_host.h"
-#include "usb/vcp_ch34x.h"
-#include "usb/vcp_cp210x.h"
-#include "usb/vcp_ftdi.h"
-
 #include "telemetry_uart.h"
 #include "usb_host_queue.h"
 #include "telemetry_ubs_device.h"
@@ -26,9 +21,6 @@
 #include "telemetry_udp_support.h"
 #include "elrs_tx_host.h"
 #include "usb_cdc_manager.h"
-
-#define TX_TIMEOUT_MS (1000)
-
 
 #ifdef UART_COMMUNICATION
 #define BUF_SIZE 1024
@@ -64,35 +56,33 @@ int read_data_from_ground(uint8_t *data)
 #endif
 }
 
-void ground_to_air_task(void *pvParameters)
+void ground_to_air(void *pvParameters)
 {
-    cdc_acm_dev_hdl_t dev_handle = (cdc_acm_dev_hdl_t)pvParameters;
+    int slot = (int)(intptr_t)pvParameters;
 
     uint8_t *data = (uint8_t *)malloc(BUF_SIZE);
 
     while (1)
     {
-        // Read data from the RX FIFO buffer
         int data_len = read_data_from_ground(data);
 
         if (data_len > 0)
         {
             ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_DEBUG);
 
-            esp_err_t err = cdc_acm_host_data_tx_blocking(dev_handle, data, data_len, TX_TIMEOUT_MS);
+            esp_err_t err = usb_cdc_write(slot, data, data_len);
 
             if (err != ESP_OK)
             {
                 ESP_LOGE(TAG, "Failed to write data: %s", esp_err_to_name(err));
             }
         }
-        // Block briefly to pass control back to the OS scheduler
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     free(data);
 }
 
-void air_to_ground_task(const uint8_t *data, size_t data_len)
+void air_to_ground(const uint8_t *data, size_t data_len)
 {
 #ifdef UART_COMMUNICATION
     write_data_to_uart(data, data_len);
@@ -103,7 +93,7 @@ void air_to_ground_task(const uint8_t *data, size_t data_len)
 
 static bool handle_data_from_USB(const uint8_t *data, size_t data_len, void *arg)
 {
-    air_to_ground_task(data, data_len);
+    air_to_ground(data, data_len);
 
     ESP_LOG_BUFFER_HEXDUMP(TAG, data, data_len, ESP_LOG_DEBUG);
     return true;
