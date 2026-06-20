@@ -89,8 +89,9 @@ static void pack_channels(uint8_t *payload, const uint16_t *channels)
     }
 }
 
-static size_t build_frame(uint8_t *out, size_t out_size, uint8_t type, const uint8_t *payload,
-                          size_t payload_len, bool extended, uint8_t ext_dest, uint8_t ext_src)
+static size_t build_frame(uint8_t *out, size_t out_size, uint8_t addr, uint8_t type,
+                          const uint8_t *payload, size_t payload_len,
+                          bool extended, uint8_t ext_dest, uint8_t ext_src)
 {
     size_t frame_len = 2 + payload_len + 2;
     if (extended)
@@ -102,7 +103,7 @@ static size_t build_frame(uint8_t *out, size_t out_size, uint8_t type, const uin
         return 0;
     }
 
-    out[0] = CRSF_SYNC_BYTE;
+    out[0] = addr;
     out[1] = (uint8_t)(frame_len - 2);
     out[2] = type;
 
@@ -126,20 +127,33 @@ size_t crsf_build_rc_channels(uint8_t *out, size_t out_size, const uint16_t *cha
 {
     uint8_t payload[CRSF_RC_CHANNELS_PAYLOAD_SIZE];
     pack_channels(payload, channels);
-    return build_frame(out, out_size, CRSF_FRAMETYPE_RC_CHANNELS_PACKED, payload,
-                       sizeof(payload), false, 0, 0);
+    return build_frame(out, out_size, CRSF_SYNC_BYTE,
+                       CRSF_FRAMETYPE_RC_CHANNELS_PACKED, payload, sizeof(payload),
+                       false, 0, 0);
+}
+
+size_t crsf_build_heartbeat(uint8_t *out, size_t out_size, uint8_t origin)
+{
+    // First byte must be the handset address (0xEE) so the TX module recognises
+    // the sender. Payload: origin device address as uint16_t little-endian.
+    uint8_t payload[2] = {origin, 0x00};
+    return build_frame(out, out_size, CRSF_ADDRESS_CRSF_TRANSMITTER,
+                       CRSF_FRAMETYPE_HEARTBEAT, payload, sizeof(payload),
+                       false, 0, 0);
 }
 
 size_t crsf_build_device_ping(uint8_t *out, size_t out_size, uint8_t dest, uint8_t src)
 {
-    return build_frame(out, out_size, CRSF_FRAMETYPE_DEVICE_PING, NULL, 0, true, dest, src);
+    return build_frame(out, out_size, CRSF_SYNC_BYTE,
+                       CRSF_FRAMETYPE_DEVICE_PING, NULL, 0, true, dest, src);
 }
 
 size_t crsf_build_parameter_read(uint8_t *out, size_t out_size, uint8_t dest, uint8_t src,
                                  uint8_t field_index, uint8_t chunk_index)
 {
     uint8_t payload[2] = {field_index, chunk_index};
-    return build_frame(out, out_size, CRSF_FRAMETYPE_PARAMETER_READ, payload, sizeof(payload),
+    return build_frame(out, out_size, CRSF_SYNC_BYTE,
+                       CRSF_FRAMETYPE_PARAMETER_READ, payload, sizeof(payload),
                        true, dest, src);
 }
 

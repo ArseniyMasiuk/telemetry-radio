@@ -10,10 +10,13 @@
 
 #include "crsf_protocol.h"
 #include "elrs_tx_host.h"
+#include "elrs_tx_uart.h"
 
 #define ELRS_TX_PARAM_FETCH_TIMEOUT_MS 2000
-#define ELRS_TX_PARAM_READ_TIMEOUT_MS 1500
-#define ELRS_TX_BOOT_SETTLE_MS 500
+#define ELRS_TX_PARAM_READ_TIMEOUT_MS  1500
+#define ELRS_TX_BOOT_SETTLE_MS         1500
+#define ELRS_TX_PING_RETRIES           3
+#define ELRS_TX_PING_RETRY_DELAY_MS    500
 
 static const char *TAG = "ELRS-TX-PARAMS";
 
@@ -188,6 +191,10 @@ static bool parse_param_payload(const uint8_t *payload, size_t payload_len, elrs
                 p += 12;
                 decimal_point = *p;
             }
+            if (decimal_point > 9)
+            {
+                decimal_point = 9;
+            }
             if (decimal_point == 0)
             {
                 snprintf(entry->value, sizeof(entry->value), "%ld", (long)value);
@@ -275,26 +282,30 @@ static esp_err_t request_device_info(void)
         return ESP_FAIL;
     }
 
-    elrs_tx_host_arm_wait(CRSF_FRAMETYPE_DEVICE_INFO);
-
-    esp_err_t err = elrs_tx_host_send_frame(frame, frame_len);
-    if (err != ESP_OK)
+    for (int attempt = 0; attempt < ELRS_TX_PING_RETRIES; attempt++)
     {
-        return err;
+        elrs_tx_uart_flush_input();
+        elrs_tx_host_arm_wait(CRSF_FRAMETYPE_DEVICE_INFO);
+
+        esp_err_t err = elrs_tx_host_send_frame(frame, frame_len);
+        if (err != ESP_OK)
+        {
+            return err;
+        }
+
+        crsf_frame_t response;
+        err = elrs_tx_host_collect_frame(ELRS_TX_PARAM_FETCH_TIMEOUT_MS, &response);
+        if (err == ESP_OK)
+        {
+            return parse_device_info(&response) ? ESP_OK : ESP_FAIL;
+        }
+
+        ESP_LOGW(TAG, "DEVICE_PING attempt %d/%d timed out, retrying...",
+                 attempt + 1, ELRS_TX_PING_RETRIES);
+        vTaskDelay(pdMS_TO_TICKS(ELRS_TX_PING_RETRY_DELAY_MS));
     }
 
-    crsf_frame_t response;
-    err = elrs_tx_host_collect_frame(ELRS_TX_PARAM_FETCH_TIMEOUT_MS, &response);
-    if (err != ESP_OK)
-    {
-        return err;
-    }
-
-    if (!parse_device_info(&response))
-    {
-        return ESP_FAIL;
-    }
-    return ESP_OK;
+    return ESP_ERR_TIMEOUT;
 }
 
 static esp_err_t fetch_parameter(uint8_t field_index)

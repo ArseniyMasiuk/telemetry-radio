@@ -16,9 +16,10 @@
 #define CRSF_ADDRESS_RADIO_TRANSMITTER  0xEA
 #define CRSF_ADDRESS_CRSF_TRANSMITTER   0xEE
 
-#define CRSF_FRAMETYPE_LINK_STATISTICS 0x14
+#define CRSF_FRAMETYPE_HEARTBEAT          0x0B
+#define CRSF_FRAMETYPE_LINK_STATISTICS    0x14
 #define CRSF_FRAMETYPE_RC_CHANNELS_PACKED 0x16
-#define CRSF_FRAMETYPE_DEVICE_PING 0x28
+#define CRSF_FRAMETYPE_DEVICE_PING        0x28
 #define CRSF_FRAMETYPE_DEVICE_INFO 0x29
 #define CRSF_FRAMETYPE_PARAMETER_SETTINGS_ENTRY 0x2B
 #define CRSF_FRAMETYPE_PARAMETER_READ 0x2C
@@ -56,6 +57,7 @@ typedef void (*crsf_frame_cb_t)(const crsf_frame_t *frame, void *user_data);
 
 uint8_t crsf_crc8(const uint8_t *data, size_t len);
 size_t crsf_build_rc_channels(uint8_t *out, size_t out_size, const uint16_t *channels);
+size_t crsf_build_heartbeat(uint8_t *out, size_t out_size, uint8_t origin);
 size_t crsf_build_device_ping(uint8_t *out, size_t out_size, uint8_t dest, uint8_t src);
 size_t crsf_build_parameter_read(uint8_t *out, size_t out_size, uint8_t dest, uint8_t src,
                                  uint8_t field_index, uint8_t chunk_index);

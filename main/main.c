@@ -1,49 +1,10 @@
-// Enable exactly one module role:
-// #define UART_COMMUNICATION      // Air Module
-// #define UDP_WIFI_COMMUNICATION  // Ground Module
-// #define ELRS_TX_HOST_MODE       // TX Host Module — CRSF handset for Nomad TX
+// Enable exactly one communication mode:
+// #define UART_COMMUNICATION   // Air Module
+#define UDP_WIFI_COMMUNICATION  // Ground Module (always includes TX module)
 
-#if defined(ELRS_TX_HOST_MODE) && (defined(UART_COMMUNICATION) || defined(UDP_WIFI_COMMUNICATION))
-#error "Enable only one module role: ELRS_TX_HOST_MODE, UART_COMMUNICATION, or UDP_WIFI_COMMUNICATION"
+#if defined(UART_COMMUNICATION) && defined(UDP_WIFI_COMMUNICATION)
+#error "Enable only one communication mode: UART_COMMUNICATION or UDP_WIFI_COMMUNICATION"
 #endif
-
-#ifdef ELRS_TX_HOST_MODE
-
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_log.h"
-#include "esp_err.h"
-
-#include "elrs_tx_host.h"
-#include "elrs_tx_params.h"
-
-static const char *TAG = "ELRS-TX-MAIN";
-
-void app_main(void)
-{
-    ESP_LOGI(TAG, "ELRS TX Host Module starting");
-
-    ESP_ERROR_CHECK(elrs_tx_host_init());
-    ESP_ERROR_CHECK(elrs_tx_host_start());
-
-    esp_err_t err = elrs_tx_params_fetch_all();
-    if (err == ESP_OK)
-    {
-        elrs_tx_params_log_all();
-    }
-    else
-    {
-        ESP_LOGW(TAG, "Parameter fetch failed: %s (RC emulation continues)", esp_err_to_name(err));
-    }
-
-    ESP_LOGI(TAG, "Running — RC emulation active, link stats logged every 1s");
-    while (1)
-    {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-}
-
-#else
 
 #include <stdio.h>
 #include <string.h>
@@ -63,15 +24,13 @@ void app_main(void)
 #include "telemetry_ubs_device.h"
 #include "telemetry_wifi.h"
 #include "telemetry_udp_support.h"
+#include "elrs_tx_host.h"
+#include "elrs_tx_params.h"
 
 #define TX_TIMEOUT_MS (1000)
 #define MAX_CDC_DEVICES (5)
 #define ESPRESSIF_VID (0x303A) // 0x303A Espressif VID, used in TinyUSB devices or in USB-Serial-JTAG devices
 
-
-// #define UART_COMMUNICATION
-#define UDP_WIFI_COMMUNICATION
-// #define ELRS_TX_HOST_MODE
 
 #ifdef UART_COMMUNICATION
 #define BUF_SIZE 1024
@@ -137,14 +96,33 @@ void FC_TO_GS_task(const uint8_t *data, size_t data_len)
 #endif
 }
 
-void setup_communications()
+static void setup_tx_module_communication(void)
+{
+    static const char *TX_TAG = "ELRS-TX-MAIN";
+    ESP_LOGI(TX_TAG, "ELRS TX Host Module starting");
+
+    ESP_ERROR_CHECK(elrs_tx_host_init());
+    ESP_ERROR_CHECK(elrs_tx_host_start());
+
+    esp_err_t err = elrs_tx_params_fetch_all();
+    if (err == ESP_OK)
+    {
+        elrs_tx_params_log_all();
+    }
+    else
+    {
+        ESP_LOGW(TX_TAG, "Parameter fetch failed: %s (RC emulation continues)", esp_err_to_name(err));
+    }
+}
+
+void setup_communications(void)
 {
 #ifdef UART_COMMUNICATION
     configure_telemetry_uart();
 #elifdef UDP_WIFI_COMMUNICATION
     configure_wifi();
-
     configure_udp_manager();
+    setup_tx_module_communication();
 #endif
 }
 
@@ -349,5 +327,3 @@ void app_main(void)
     ESP_LOGI("app_main", "\t- Exit completed");
     delete_app_queue();
 }
-
-#endif /* ELRS_TX_HOST_MODE */

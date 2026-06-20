@@ -1,4 +1,4 @@
-# telemetry-radio — Project Reference
+﻿# telemetry-radio — Project Reference
 
 Reference document for developers and AI assistants working on this codebase.
 
@@ -147,7 +147,7 @@ USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`.
 | File | Role |
 |------|------|
 | `ground_unit/tx_module/crsf_protocol.c` / `.h` | CRSF frame build/parse, CRC8 (poly `0xD5`), all frame type/address constants |
-| `ground_unit/tx_module/elrs_tx_uart.c` / `.h` | UART2 @ GPIO4/5, 420000 baud, optional line inversion (`ELRS_TX_UART_INVERTED`) |
+| `ground_unit/tx_module/elrs_tx_uart.c` / `.h` | UART1 @ GPIO17/18, 400000 baud, inverted (`ELRS_TX_UART_INVERTED 1`), half-duplex S port |
 | `ground_unit/tx_module/elrs_tx_host.c` / `.h` | RC emulation task (`crsf_tx_task`), RX parser task (`crsf_rx_task`), link stats logging |
 | `ground_unit/tx_module/elrs_tx_params.c` / `.h` | Parameter discovery + C API + boot log dump |
 
@@ -181,7 +181,7 @@ Flash **Air Module** and **Ground Module** builds separately with the appropriat
 
 ## TX Host Module (implemented — enable `ELRS_TX_HOST_MODE` in `main.c`)
 
-Third build role: ESP32-S3 connected to the **internal TX/RX pads** of a detached **Radiomaster Nomad** ELRS TX module running **ELRS 4.0**. TX and RX are already configured with the **same regulatory domain** and **same binding phrase** — no special bind-mode command flow is needed.
+Third build role: ESP32-S3 connected to the **S port** (CRSF serial pad) of a detached **Radiomaster Nomad** ELRS TX module running **ELRS 4.0**. TX and RX are already configured with the **same regulatory domain** and **same binding phrase** — no special bind-mode command flow is needed.
 
 ### What it does
 
@@ -199,11 +199,37 @@ Third build role: ESP32-S3 connected to the **internal TX/RX pads** of a detache
 
 | Item | Value |
 |------|-------|
-| TX module | Radiomaster Nomad (internal UART pads) |
+| TX module | Radiomaster Nomad (S port — JR bay serial signal pad) |
 | ELRS version | **4.0** |
 | ESP | ESP32-S3 |
-| Protocol | CRSF (handset side) |
+| Protocol | CRSF handset side — half-duplex, inverted, 400000 baud |
 | Prerequisite | TX and RX: same regulatory domain + binding phrase |
+
+### Hardware wiring
+
+#### Why a single pad (S port)?
+
+The Radiomaster Nomad's ELRS firmware defines `"serial_rx": 4, "serial_tx": 4` — both the receive and transmit functions share **Nomad GPIO4**, which is the **S port** (the serial signal pin on the JR module bay edge connector). This is standard CRSF half-duplex: the handset and the TX module take turns on one wire. Both ESP32 TX and RX must therefore physically meet at that same pad.
+
+#### Do NOT use the other internal pads
+
+The Nomad PCB also exposes backpack bridge pads internally (Nomad GPIO18 = backpack RX, GPIO5 = backpack TX, 460800 baud) and passthrough/debug pads. These have no relation to the CRSF handset protocol — connecting to them will produce no response regardless of baud rate or inversion setting.
+
+#### Connection table
+
+| Nomad pad | ESP32-S3 pin | Notes |
+|-----------|-------------|-------|
+| S port (GPIO4) | GPIO17 (UART1 TX) | ESP32 drives the line outward |
+| S port (GPIO4) | GPIO18 (UART1 RX) | ESP32 reads the Nomad's responses — same physical node as above |
+| GND | GND | Required — shared ground |
+| XT30 / power in | external supply | 6–16.8 V DC; do NOT power from ESP32 3.3 V rail |
+
+#### Signal characteristics
+
+- **Logic level:** 3.3 V — matches ESP32-S3 GPIO natively; no level shifter needed
+- **Inverted:** yes — ELRS half-duplex mode always starts with inverted UART; configured via `ELRS_TX_UART_INVERTED 1`
+- **Baud rate:** 400000 — the Nomad boots at 5250000 then autobauds to 400000 after ~1 s of no valid frames, then locks on
+- **Loopback:** because both GPIO17 and GPIO18 share one wire, the ESP32 will receive echoes of its own TX frames; this is harmless — the frame types sent (RC channels `0x16`, heartbeat `0x0B`) are silently ignored by the RX parser
 
 ### Build flag
 
@@ -220,11 +246,11 @@ A `#error` guard prevents enabling more than one role simultaneously.
 ### Architecture
 
 ```
-┌─────────────────┐   UART2 (CRSF)   ┌──────────────────────┐   RF (ELRS 4.0)   ┌─────────────┐
+┌─────────────────┐   UART1 (CRSF)   ┌──────────────────────┐   RF (ELRS 4.0)   ┌─────────────┐
 │  ESP32-S3       │ ◄──────────────► │  Radiomaster Nomad   │ ────────────────► │  ELRS RX    │
-│  TX Host Module │  emulate remote  │  TX module (pads)    │  search + link    │  (aircraft) │
-└────────┬────────┘  GPIO 4/5        └──────────────────────┘                   └─────────────┘
-         │           420000 baud
+│  TX Host Module │  emulate remote  │  TX module S port    │  search + link    │  (aircraft) │
+└────────┬────────┘  GPIO17+18→S     └──────────────────────┘                   └─────────────┘
+         │           400000 baud, inverted, half-duplex
          └── serial logs: link stats every 1s (RSSI, LQ, SNR)
          └── serial logs: all TX params on boot
          └── C API: elrs_tx_params_get() — display layer TBD
@@ -237,7 +263,7 @@ All under `ground_unit/tx_module/` (IDF component `tx_module`):
 | File | Status | Role |
 |------|--------|------|
 | `crsf_protocol.c/h` | **Done** | CRSF frame build/parse, CRC8, all frame types and addresses |
-| `elrs_tx_uart.c/h` | **Done** | UART2 @ GPIO4/5, 420000 baud, optional inversion |
+| `elrs_tx_uart.c/h` | **Done** | UART1 @ GPIO17/18, 400000 baud, inverted (ELRS_TX_UART_INVERTED 1), half-duplex S port |
 | `elrs_tx_host.c/h` | **Done** | RC emulation task, RX parser task, link stats; arm/collect API |
 | `elrs_tx_params.c/h` | **Done** | Parameter fetch (multi-chunk reassembly) + C API + boot log dump |
 
@@ -262,11 +288,12 @@ void elrs_tx_params_log_all(void);
 
 ```
 power on
-  → elrs_tx_host_init()     UART2 init, parser init, mutex/semaphore create
+  → elrs_tx_host_init()     UART1 init (GPIO17/18, 400000 baud, inverted), parser init, mutex/semaphore create
   → elrs_tx_host_start()    spawn crsf_rx_task (pri 10) + crsf_tx_task (pri 9)
        crsf_tx_task          sends 0x16 RC_CHANNELS_PACKED every 10 ms (neutral sticks)
+                             sends 0x0B HEARTBEAT (origin 0xEE) every 200 ms — keeps Nomad out of WiFi mode
        crsf_rx_task          reads UART, feeds parser, dispatches frame callbacks
-  → 500 ms settle
+  → 1500 ms settle (ELRS_TX_BOOT_SETTLE_MS — allows Nomad CRSF stack to initialise)
   → elrs_tx_params_fetch_all()
        send 0x28 DEVICE_PING
        wait for 0x29 DEVICE_INFO  (device name, HW/SW ver, param count)
@@ -282,34 +309,31 @@ power on
 
 Display/UI (web, screen, etc.) will consume `elrs_tx_params_get()` later.
 
-### Bring-up checklist (hardware still needs testing)
+### Bring-up checklist
 
-- [ ] Connect Nomad internal pads to ESP GPIO 4 (TX) and GPIO 5 (RX)
+- [x] Solder ESP32 GPIO17 and GPIO18 both to Nomad S port; connect GND
+- [x] Set `ELRS_TX_UART_INVERTED 1` in `ground_unit/tx_module/elrs_tx_uart.h`
 - [ ] Flash with `ELRS_TX_HOST_MODE` enabled
 - [ ] Confirm Nomad is in **CRSF** link mode, not MAVLink (ELRS Configurator 4.0)
-- [ ] Check monitor for `ELRS-TX-HOST: Handset emulation started`
-- [ ] If no `DEVICE_INFO` response → try `ELRS_TX_UART_INVERTED 1` in `ground_unit/tx_module/elrs_tx_uart.h`
-- [ ] If still no response → swap GPIO 4/5 (TX/RX reversed on pad)
+- [ ] Check monitor for `ELRS-TX-HOST: Handset emulation started` — Nomad should stay in RF mode (no WiFi fallback)
+- [ ] Check monitor for `DEVICE_INFO` response (appears ~1.5 s after boot)
 - [ ] Confirm link stats appear once RX is powered (`RSSI1`, `LQ` in logs)
 
 ### Remaining / future work
 
 | Item | Priority |
 |------|----------|
-| Hardware bring-up and pin confirmation | **Now** |
-| Inversion flag validation on real Nomad | **Now** |
 | Parameter write (`0x2D`) to change TX config | Future |
 | Expose param API over Ground Module WiFi/UDP | Future |
 | Display layer (screen, web UI) | Future |
 
 ## Known Gaps / TODOs
 
-1. **TX Host Module — hardware bring-up** — code is implemented and reviewed; GPIO pins (4/5) and inversion flag still need confirmation on real Nomad hardware (see bring-up checklist above).
-2. **Ground Module uplink not implemented** — `read_data_from_GS` returns 0; Mission Planner commands cannot reach the FC over UDP yet.
-3. **`udp_read_all`** — receive path stubbed; not wired into `GS_to_FC_task`.
-4. **Air Module** — basic version works; speed and bug audit deferred.
-5. **Typo in filename** — `telemetry_ubs_device.c` (likely meant `usb`); keep name unless renaming intentionally.
-6. **README** references external ESP-IDF USB examples that may not exist in this standalone repo.
+1. **Ground Module uplink not implemented** — `read_data_from_GS` returns 0; Mission Planner commands cannot reach the FC over UDP yet.
+2. **`udp_read_all`** — receive path stubbed; not wired into `GS_to_FC_task`.
+3. **Air Module** — basic version works; speed and bug audit deferred.
+4. **Typo in filename** — `telemetry_ubs_device.c` (likely meant `usb`); keep name unless renaming intentionally.
+5. **README** references external ESP-IDF USB examples that may not exist in this standalone repo.
 
 ## Conventions & Notes
 

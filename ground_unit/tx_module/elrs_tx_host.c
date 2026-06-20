@@ -9,8 +9,9 @@
 
 #include "elrs_tx_uart.h"
 
-#define ELRS_TX_RC_INTERVAL_MS 10
-#define ELRS_TX_RX_BUF_SIZE 128
+#define ELRS_TX_RC_INTERVAL_MS       10
+#define ELRS_TX_HEARTBEAT_INTERVAL_MS 200
+#define ELRS_TX_RX_BUF_SIZE          128
 
 static const char *TAG = "ELRS-TX-HOST";
 
@@ -18,8 +19,8 @@ static crsf_parser_t s_parser;
 static SemaphoreHandle_t s_uart_mutex;
 static SemaphoreHandle_t s_response_sem;
 static crsf_frame_t s_last_frame;
-static uint8_t s_wait_type;
-static bool s_wait_pending;
+static volatile uint8_t s_wait_type;
+static volatile bool s_wait_pending;
 static volatile bool s_host_running;
 static uint32_t s_last_link_log_ms;
 
@@ -78,6 +79,9 @@ static void crsf_tx_task(void *arg)
         channels[i] = CRSF_CHANNEL_CENTER;
     }
 
+    const uint32_t heartbeat_every = ELRS_TX_HEARTBEAT_INTERVAL_MS / ELRS_TX_RC_INTERVAL_MS;
+    uint32_t tick = 0;
+
     while (s_host_running)
     {
         size_t frame_len = crsf_build_rc_channels(frame, sizeof(frame), channels);
@@ -89,6 +93,21 @@ static void crsf_tx_task(void *arg)
                 xSemaphoreGive(s_uart_mutex);
             }
         }
+
+        if (++tick >= heartbeat_every)
+        {
+            tick = 0;
+            frame_len = crsf_build_heartbeat(frame, sizeof(frame), CRSF_ADDRESS_CRSF_TRANSMITTER);
+            if (frame_len > 0)
+            {
+                if (xSemaphoreTake(s_uart_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+                {
+                    elrs_tx_uart_write(frame, frame_len);
+                    xSemaphoreGive(s_uart_mutex);
+                }
+            }
+        }
+
         vTaskDelay(pdMS_TO_TICKS(ELRS_TX_RC_INTERVAL_MS));
     }
     vTaskDelete(NULL);
