@@ -9,7 +9,7 @@
 #include "usb/usb_host.h"
 
 #include "telemetry_ubs_device.h"
-#include "device_queue.h"
+#include "usb_host_queue.h"
 
 #define USB_HOST_PRIORITY (20)
 
@@ -81,11 +81,10 @@ static void usb_lib_task(void *arg)
     vTaskDelete(NULL);
 }
 
-
 /**
  * @brief New USB device callback
  *
- * Gets VID/PID and posts APP_DEVICE_CONNECTED to app queue.
+ * Gets VID/PID and posts USB_HOST_DEVICE_CONNECTED to app queue.
  * Called from USB Host context; device is closed after this callback returns.
  *
  * @param[in] usb_dev    USB device handle
@@ -106,8 +105,8 @@ static void new_dev_cb(usb_device_handle_t usb_dev)
 
     if (queue_is_valid())
     {
-        app_message_t msg = {
-            .id = APP_DEVICE_CONNECTED,
+        usb_host_message_t msg = {
+            .id = USB_HOST_DEVICE_CONNECTED,
             .data.new_dev.vid = vid,
             .data.new_dev.pid = pid,
         };

@@ -119,15 +119,16 @@ Primary target: **ESP32-S3** with USB-OTG host. Up to **5 concurrent CDC devices
 
 ## Main Loop (`app_main`)
 
-1. Create app message queue (`device_queue`)
-2. Start USB host + CDC-ACM driver (`telemetry_ubs_device`)
-3. Configure communications — UART (Air) or WiFi+UDP (Ground) via `setup_communications()`
-4. Block on queue messages:
-   - `APP_DEVICE_CONNECTED` — open CDC device, spawn `GS_to_FC_task`
-   - `APP_DEVICE_DISCONNECTED` — close device slot
-   - `APP_QUIT` — tear down and exit
+1. Configure communications — UART (Air) or WiFi+UDP (Ground) via `setup_communications()`
+2. Call `start_main_USB_task(handle_data_from_USB)`:
+   a. Create USB host message queue (`usb_host_queue`)
+   b. Start USB host + CDC-ACM driver (`configure_USB`)
+   c. Block on queue messages:
+      - `USB_HOST_DEVICE_CONNECTED` — open CDC device, spawn `GS_to_FC_task`
+      - `USB_HOST_DEVICE_DISCONNECTED` — close device slot
+      - `USB_HOST_QUIT` — tear down and exit
 
-USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`.
+USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`. `start_main_USB_task` accepts a `cdc_acm_data_callback_t` so the data handler can be injected (facilitating future reuse by other roles).
 
 ## Source Files
 
@@ -135,9 +136,9 @@ USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`.
 
 | File | Role |
 |------|------|
-| `main/main.c` | Entry point, role selection (`#define`s + `#error` guard), CDC management, MAVLink bridge tasks |
-| `main/telemetry_ubs_device.c` | USB host + CDC-ACM install, device hotplug callback |
-| `main/device_queue.c` / `.h` | FreeRTOS queue for app events (connect/disconnect/quit) |
+| `main/main.c` | Entry point, role selection (`#define`s + `#error` guard), `start_main_USB_task()`, MAVLink bridge tasks |
+| `common/usb_host/telemetry_ubs_device.c` / `.h` | USB host + CDC-ACM install, device hotplug callback |
+| `common/usb_host/usb_host_queue.c` / `.h` | FreeRTOS queue for USB host events (`usb_host_message_t`, connect/disconnect/quit) |
 | `main/telemetry_uart.c` / `.h` | UART1 transport (GPIO17/18, 460800 baud) — **Air Module** |
 | `main/telemetry_wifi.c` / `.h` | WiFi soft-AP — **Ground Module** |
 | `main/telemetry_udp_support.c` / `.h` | UDP client registry and send — **Ground Module** |
@@ -157,14 +158,16 @@ USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`.
 - **Project name:** `telemetry-radio`
 - **Component layout:**
   - `main/` — Air/Ground Module sources + entry point (all roles)
+  - `common/usb_host/` — Shared USB host + queue IDF component; registered via `EXTRA_COMPONENT_DIRS` in root `CMakeLists.txt`
   - `ground_unit/tx_module/` — TX Host Module as a standalone IDF component; registered via `EXTRA_COMPONENT_DIRS` in root `CMakeLists.txt`
 - **Component deps** (`main/idf_component.yml` — Air/Ground Module only):
   - `usb_host_cdc_acm` ^2.3
-  - `usb_host_ch34x_vcp` ^2.2
+  - `usb_host_ch34x_vcp` ^2.2 (locked: 2.2.1)
   - `usb_host_cp210x_vcp` ^2.2
   - `usb_host_ftdi_vcp` ^2.1
-- **IDF components required (`main`):** `esp_driver_uart`, `esp_wifi`, `nvs_flash`, `tx_module`
+- **IDF components required (`main`):** `esp_driver_uart`, `esp_wifi`, `nvs_flash`, `tx_module`, `usb_host`
 - **IDF components required (`tx_module`):** `esp_driver_uart`
+- **IDF components required (`usb_host`):** _(none — only IDF built-ins)_
 
 ### Build & flash
 
@@ -332,7 +335,7 @@ Display/UI (web, screen, etc.) will consume `elrs_tx_params_get()` later.
 1. **Ground Module uplink not implemented** — `read_data_from_GS` returns 0; Mission Planner commands cannot reach the FC over UDP yet.
 2. **`udp_read_all`** — receive path stubbed; not wired into `GS_to_FC_task`.
 3. **Air Module** — basic version works; speed and bug audit deferred.
-4. **Typo in filename** — `telemetry_ubs_device.c` (likely meant `usb`); keep name unless renaming intentionally.
+4. **Typo in filename** — `telemetry_ubs_device.c` (likely meant `usb`); keep name unless renaming intentionally. File now lives in `common/usb_host/`.
 5. **README** references external ESP-IDF USB examples that may not exist in this standalone repo.
 
 ## Conventions & Notes
@@ -342,7 +345,7 @@ Display/UI (web, screen, etc.) will consume `elrs_tx_params_get()` later.
 | Tag | Module |
 |-----|--------|
 | `USB-CDC-MAIN` | `main.c` |
-| `USB-CDC` | `telemetry_ubs_device.c` |
+| `USB-CDC` | `common/usb_host/telemetry_ubs_device.c` |
 | `WIFI-MODULE` | `telemetry_wifi.c` |
 | `UDP_SERVER` | `telemetry_udp_support.c` |
 | `UART-MODULE` | `telemetry_uart.c` |

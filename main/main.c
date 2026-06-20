@@ -20,7 +20,7 @@
 #include "usb/vcp_ftdi.h"
 
 #include "telemetry_uart.h"
-#include "device_queue.h"
+#include "usb_host_queue.h"
 #include "telemetry_ubs_device.h"
 #include "telemetry_wifi.h"
 #include "telemetry_udp_support.h"
@@ -157,8 +157,8 @@ static void handle_event(const cdc_acm_host_dev_event_data_t *event, void *user_
     case CDC_ACM_HOST_DEVICE_DISCONNECTED:
         if (queue_is_valid())
         {
-            app_message_t msg = {
-                .id = APP_DEVICE_DISCONNECTED,
+            usb_host_message_t msg = {
+                .id = USB_HOST_DEVICE_DISCONNECTED,
                 .data.device_slot = (int)(intptr_t)user_ctx,
             };
             send_message_to_queue(&msg);
@@ -256,13 +256,10 @@ static void free_all_cdc_devices(void)
     }
 }
 
-void app_main(void)
+void start_main_USB_task(cdc_acm_data_callback_t usb_device_data_handler)
 {
-    create_app_queue();
-
+    create_usb_host_queue();
     configure_USB();
-
-    setup_communications();
 
     cdc_acm_host_device_config_t dev_config = {
         .connection_timeout_ms = 0,
@@ -270,19 +267,19 @@ void app_main(void)
         .in_buffer_size = 512,
         .user_arg = NULL,
         .event_cb = handle_event,
-        .data_cb = handle_data_from_USB};
+        .data_cb = usb_device_data_handler};
 
     ESP_LOGI("app_main", "Waiting for CDC devices.");
 
     bool running = true;
     while (running)
     {
-        app_message_t msg;
+        usb_host_message_t msg;
         get_message_from_queue(&msg);
 
         switch (msg.id)
         {
-        case APP_DEVICE_CONNECTED:
+        case USB_HOST_DEVICE_CONNECTED:
         {
             int slot = find_free_slot();
             if (slot < 0)
@@ -303,14 +300,14 @@ void app_main(void)
             break;
         }
 
-        case APP_DEVICE_DISCONNECTED:
+        case USB_HOST_DEVICE_DISCONNECTED:
         {
             ESP_LOGI("app_main", "Device disconnected from slot %d", msg.data.device_slot);
             free_cdc_device(msg.data.device_slot);
             break;
         }
 
-        case APP_QUIT:
+        case USB_HOST_QUIT:
         {
             ESP_LOGI("app_main", "Exiting example");
             free_all_cdc_devices();
@@ -325,5 +322,12 @@ void app_main(void)
     }
 
     ESP_LOGI("app_main", "\t- Exit completed");
-    delete_app_queue();
+    delete_usb_host_queue();
+}
+
+void app_main(void)
+{
+    setup_communications();
+
+    start_main_USB_task(handle_data_from_USB);
 }

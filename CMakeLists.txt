@@ -4,8 +4,11 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.22)
 
-# ground_unit/ is a component search path; IDF will find tx_module inside it.
-set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/ground_unit")
+# Component search paths: IDF will find tx_module inside ground_unit/ and usb_host inside common/.
+set(EXTRA_COMPONENT_DIRS
+    "${CMAKE_CURRENT_LIST_DIR}/ground_unit"
+    "${CMAKE_CURRENT_LIST_DIR}/common"
+)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # "Trim" the build. Include the minimal set of components, main, and anything it depends on.
