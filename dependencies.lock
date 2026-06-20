@@ -85,6 +85,6 @@ direct_dependencies:
 - espressif/usb_host_ch34x_vcp
 - espressif/usb_host_cp210x_vcp
 - espressif/usb_host_ftdi_vcp
-manifest_hash: 90cfc7be6c2d02236c9bc58ecbaa68a96b8d3a8a262ea2baf61a646dedc31d79
+manifest_hash: 2bd950eaa8cd2b33c181c08f99448fbf6f89e543f546baac9fe5c761703a7a6c
 target: esp32s3
 version: 3.0.0

@@ -8,6 +8,7 @@
 #include "esp_log.h"
 
 #include "elrs_tx_uart.h"
+#include "elrs_tx_params.h"
 
 #define ELRS_TX_RC_INTERVAL_MS       10
 #define ELRS_TX_HEARTBEAT_INTERVAL_MS 200
@@ -186,4 +187,23 @@ esp_err_t elrs_tx_host_wait_frame(uint8_t type, uint32_t timeout_ms, crsf_frame_
 {
     elrs_tx_host_arm_wait(type);
     return elrs_tx_host_collect_frame(timeout_ms, out);
+}
+
+void elrs_tx_host_setup(void)
+{
+    static const char *TX_TAG = "ELRS-TX-MAIN";
+    ESP_LOGI(TX_TAG, "ELRS TX Host Module starting");
+
+    ESP_ERROR_CHECK(elrs_tx_host_init());
+    ESP_ERROR_CHECK(elrs_tx_host_start());
+
+    esp_err_t err = elrs_tx_params_fetch_all();
+    if (err == ESP_OK)
+    {
+        elrs_tx_params_log_all();
+    }
+    else
+    {
+        ESP_LOGW(TX_TAG, "Parameter fetch failed: %s (RC emulation continues)", esp_err_to_name(err));
+    }
 }

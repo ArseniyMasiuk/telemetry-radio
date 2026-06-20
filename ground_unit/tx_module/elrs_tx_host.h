@@ -5,6 +5,7 @@
 
 esp_err_t elrs_tx_host_init(void);
 esp_err_t elrs_tx_host_start(void);
+void elrs_tx_host_setup(void);
 esp_err_t elrs_tx_host_send_frame(const uint8_t *data, size_t len);
 
 // Arm the response waiter for the given frame type. Must be called BEFORE

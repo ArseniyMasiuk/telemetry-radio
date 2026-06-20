@@ -69,8 +69,8 @@ AIR MODULE (UART_COMMUNICATION)                GROUND MODULE (UDP_WIFI_COMMUNICA
 
 | Direction | Description | Task / function |
 |-----------|-------------|-----------------|
-| FC → GS (downlink) | MAVLink from FC USB → outbound transport | `handle_data_from_USB` → `FC_TO_GS_task` |
-| GS → FC (uplink) | MAVLink from inbound transport → FC USB | `GS_to_FC_task` → `read_data_from_GS` → `cdc_acm_host_data_tx_blocking` |
+| FC → GS (downlink) | MAVLink from FC USB → outbound transport | `handle_data_from_USB` → `air_to_ground_task` |
+| GS → FC (uplink) | MAVLink from inbound transport → FC USB | `ground_to_air_task` → `read_data_from_ground` → `cdc_acm_host_data_tx_blocking` |
 
 | Module | Downlink transport | Uplink transport |
 |--------|-------------------|------------------|
@@ -119,16 +119,16 @@ Primary target: **ESP32-S3** with USB-OTG host. Up to **5 concurrent CDC devices
 
 ## Main Loop (`app_main`)
 
-1. Configure communications — UART (Air) or WiFi+UDP (Ground) via `setup_communications()`
-2. Call `start_main_USB_task(handle_data_from_USB)`:
+1. Configure communications — UART (Air) or WiFi+UDP+ELRS-TX (Ground) via `setup_communications()`
+2. Call `start_main_USB_task(handle_data_from_USB)` (implemented in `common/usb_host/usb_cdc_manager.c`):
    a. Create USB host message queue (`usb_host_queue`)
    b. Start USB host + CDC-ACM driver (`configure_USB`)
    c. Block on queue messages:
-      - `USB_HOST_DEVICE_CONNECTED` — open CDC device, spawn `GS_to_FC_task`
+      - `USB_HOST_DEVICE_CONNECTED` — open CDC device, spawn `ground_to_air_task`
       - `USB_HOST_DEVICE_DISCONNECTED` — close device slot
       - `USB_HOST_QUIT` — tear down and exit
 
-USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`. `start_main_USB_task` accepts a `cdc_acm_data_callback_t` so the data handler can be injected (facilitating future reuse by other roles).
+USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`. `start_main_USB_task` accepts a `cdc_acm_data_callback_t` so the data handler can be injected from `main.c` (data routing stays in `main.c`; USB lifecycle management is in `usb_cdc_manager`).
 
 ## Source Files
 
@@ -136,7 +136,8 @@ USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`.
 
 | File | Role |
 |------|------|
-| `main/main.c` | Entry point, role selection (`#define`s + `#error` guard), `start_main_USB_task()`, MAVLink bridge tasks |
+| `main/main.c` | Entry point, role selection (`#define`s + `#error` guard), data routing tasks (`ground_to_air_task`, `air_to_ground_task`, `handle_data_from_USB`) |
+| `common/usb_host/usb_cdc_manager.c` / `.h` | CDC device lifecycle: slot management, VCP open dispatch, event handling, `start_main_USB_task()` |
 | `common/usb_host/telemetry_ubs_device.c` / `.h` | USB host + CDC-ACM install, device hotplug callback |
 | `common/usb_host/usb_host_queue.c` / `.h` | FreeRTOS queue for USB host events (`usb_host_message_t`, connect/disconnect/quit) |
 | `main/telemetry_uart.c` / `.h` | UART1 transport (GPIO17/18, 460800 baud) — **Air Module** |
@@ -149,7 +150,7 @@ USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`.
 |------|------|
 | `ground_unit/tx_module/crsf_protocol.c` / `.h` | CRSF frame build/parse, CRC8 (poly `0xD5`), all frame type/address constants |
 | `ground_unit/tx_module/elrs_tx_uart.c` / `.h` | UART1 @ GPIO17/18, 400000 baud, inverted (`ELRS_TX_UART_INVERTED 1`), half-duplex S port |
-| `ground_unit/tx_module/elrs_tx_host.c` / `.h` | RC emulation task (`crsf_tx_task`), RX parser task (`crsf_rx_task`), link stats logging |
+| `ground_unit/tx_module/elrs_tx_host.c` / `.h` | RC emulation task (`crsf_tx_task`), RX parser task (`crsf_rx_task`), link stats logging, `elrs_tx_host_setup()` |
 | `ground_unit/tx_module/elrs_tx_params.c` / `.h` | Parameter discovery + C API + boot log dump |
 
 ## Build System
@@ -167,7 +168,7 @@ USB hotplug events are posted to the queue from `new_dev_cb` and `handle_event`.
   - `usb_host_ftdi_vcp` ^2.1
 - **IDF components required (`main`):** `esp_driver_uart`, `esp_wifi`, `nvs_flash`, `tx_module`, `usb_host`
 - **IDF components required (`tx_module`):** `esp_driver_uart`
-- **IDF components required (`usb_host`):** _(none — only IDF built-ins)_
+- **IDF components required (`usb_host`):** `espressif__usb_host_cdc_acm`, `espressif__usb_host_ch34x_vcp`, `espressif__usb_host_cp210x_vcp`, `espressif__usb_host_ftdi_vcp`
 
 ### Build & flash
 
@@ -267,13 +268,16 @@ All under `ground_unit/tx_module/` (IDF component `tx_module`):
 |------|--------|------|
 | `crsf_protocol.c/h` | **Done** | CRSF frame build/parse, CRC8, all frame types and addresses |
 | `elrs_tx_uart.c/h` | **Done** | UART1 @ GPIO17/18, 400000 baud, inverted (ELRS_TX_UART_INVERTED 1), half-duplex S port |
-| `elrs_tx_host.c/h` | **Done** | RC emulation task, RX parser task, link stats; arm/collect API |
+| `elrs_tx_host.c/h` | **Done** | RC emulation task, RX parser task, link stats; arm/collect API; `elrs_tx_host_setup()` |
 | `elrs_tx_params.c/h` | **Done** | Parameter fetch (multi-chunk reassembly) + C API + boot log dump |
 
 ### C API
 
 ```c
-// Initialise and start handset emulation (call once at boot)
+// Initialise, start handset emulation, and fetch+log params (call once at boot)
+void elrs_tx_host_setup(void);
+
+// Lower-level steps called internally by elrs_tx_host_setup()
 esp_err_t elrs_tx_host_init(void);
 esp_err_t elrs_tx_host_start(void);
 
@@ -291,6 +295,7 @@ void elrs_tx_params_log_all(void);
 
 ```
 power on
+  → elrs_tx_host_setup()    calls init → start → fetch params → log params (single entry point from main.c)
   → elrs_tx_host_init()     UART1 init (GPIO17/18, 400000 baud, inverted), parser init, mutex/semaphore create
   → elrs_tx_host_start()    spawn crsf_rx_task (pri 10) + crsf_tx_task (pri 9)
        crsf_tx_task          sends 0x16 RC_CHANNELS_PACKED every 10 ms (neutral sticks)
@@ -333,7 +338,7 @@ Display/UI (web, screen, etc.) will consume `elrs_tx_params_get()` later.
 ## Known Gaps / TODOs
 
 1. **Ground Module uplink not implemented** — `read_data_from_GS` returns 0; Mission Planner commands cannot reach the FC over UDP yet.
-2. **`udp_read_all`** — receive path stubbed; not wired into `GS_to_FC_task`.
+2. **`udp_read_all`** — receive path stubbed; not wired into `ground_to_air_task`.
 3. **Air Module** — basic version works; speed and bug audit deferred.
 4. **Typo in filename** — `telemetry_ubs_device.c` (likely meant `usb`); keep name unless renaming intentionally. File now lives in `common/usb_host/`.
 5. **README** references external ESP-IDF USB examples that may not exist in this standalone repo.
@@ -344,12 +349,12 @@ Display/UI (web, screen, etc.) will consume `elrs_tx_params_get()` later.
 
 | Tag | Module |
 |-----|--------|
-| `USB-CDC-MAIN` | `main.c` |
+| `USB-CDC-MAIN` | `main.c` and `common/usb_host/usb_cdc_manager.c` |
 | `USB-CDC` | `common/usb_host/telemetry_ubs_device.c` |
 | `WIFI-MODULE` | `telemetry_wifi.c` |
 | `UDP_SERVER` | `telemetry_udp_support.c` |
 | `UART-MODULE` | `telemetry_uart.c` |
-| `ELRS-TX-MAIN` | `main.c` (TX Host role) |
+| `ELRS-TX-MAIN` | `ground_unit/tx_module/elrs_tx_host.c` (`elrs_tx_host_setup`) |
 | `ELRS-TX-HOST` | `ground_unit/tx_module/elrs_tx_host.c` |
 | `ELRS-TX-UART` | `ground_unit/tx_module/elrs_tx_uart.c` |
 | `ELRS-TX-PARAMS` | `ground_unit/tx_module/elrs_tx_params.c` |
@@ -358,8 +363,8 @@ Display/UI (web, screen, etc.) will consume `elrs_tx_params_get()` later.
 
 | Task name | Priority | Source |
 |-----------|----------|--------|
-| `usb_lib` | 20 | `telemetry_ubs_device.c` |
-| `GS to FC task` | 5 | `main.c` |
+| `usb_lib` | 20 | `common/usb_host/telemetry_ubs_device.c` |
+| `ground to air task` | 5 | `common/usb_host/usb_cdc_manager.c` (spawned); task function in `main.c` |
 | `elrs_crsf_rx` | 10 | `ground_unit/tx_module/elrs_tx_host.c` |
 | `elrs_crsf_tx` | 9 | `ground_unit/tx_module/elrs_tx_host.c` |
 
